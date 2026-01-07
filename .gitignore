@@ -3,10 +3,11 @@
 **/venvs/
 **/node_modules/
 **/.next/
-**/__pycache__/*.pyc
+**/__pycache__/
+**/*.pyc
 *.log
-*debug*.txt
-*output*.txt
+debug.txt
+output.txt
 .cache
 *.cache
 ~$*.pptx
