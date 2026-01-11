@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from typing import Any, Dict, List
 
@@ -222,10 +223,12 @@ class Chunker:
 		
 
 		# Instantiate HDBSCANplus - self-converging parameter search
+		debug_flag = os.getenv("HDBSCANPLUS_DEBUG", "").strip().lower() in {"1", "true", "yes", "y"}
 		hdb = HDBSCANplus(
 			metric="cosine",
 			normalizeVectors=True,
 			maxTrials=120,
+			debug=debug_flag,
 		)
 		
 		# Run fitPredict

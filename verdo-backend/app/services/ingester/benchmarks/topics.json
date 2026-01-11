@@ -1,0 +1,11 @@
+{
+  "ml_foundations": "Core machine learning concepts and definitions.",
+  "ml_evaluation": "Model validation and generalization practices.",
+  "climate_policy": "Mitigation policy instruments and emissions management.",
+  "climate_adaptation": "Resilience and adaptation planning strategies.",
+  "control_systems": "Feedback control and stabilization methods.",
+  "reliability_engineering": "System reliability metrics and failure patterns.",
+  "human_factors": "Operator experience and interface design.",
+  "project_management": "Scheduling and risk management practices.",
+  "energy_optimization": "Energy systems optimization and reinforcement learning policies."
+}

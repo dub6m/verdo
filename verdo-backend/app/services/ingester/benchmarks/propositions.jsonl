@@ -1,0 +1,14 @@
+{"proposition_id": "prop_001", "text": "Systems improve with data instead of explicit rules.", "source_doc": "raw/lecture_decks/intro_ml_short.md"}
+{"proposition_id": "prop_002", "text": "Supervised learning maps inputs to labeled outputs.", "source_doc": "raw/lecture_decks/intro_ml_short.md"}
+{"proposition_id": "prop_003", "text": "Train, validation, and test splits support evaluation.", "source_doc": "raw/lecture_decks/intro_ml_short.md"}
+{"proposition_id": "prop_004", "text": "Regularization and cross-validation reduce overfitting.", "source_doc": "raw/lecture_decks/intro_ml_short.md"}
+{"proposition_id": "prop_005", "text": "Carbon taxes and cap-and-trade are policy instruments.", "source_doc": "raw/lecture_decks/climate_policy_short.md"}
+{"proposition_id": "prop_006", "text": "Resilience investments protect coastal infrastructure.", "source_doc": "raw/lecture_decks/climate_policy_short.md"}
+{"proposition_id": "prop_007", "text": "PID controllers combine proportional, integral, and derivative terms.", "source_doc": "raw/lecture_notes/systems_notes_multitopic.md"}
+{"proposition_id": "prop_008", "text": "Failure rates follow the bathtub curve.", "source_doc": "raw/lecture_notes/systems_notes_multitopic.md"}
+{"proposition_id": "prop_009", "text": "Interface design reduces operator error by matching mental models.", "source_doc": "raw/lecture_notes/systems_notes_multitopic.md"}
+{"proposition_id": "prop_010", "text": "Critical path analysis identifies schedule-defining tasks.", "source_doc": "raw/lecture_notes/systems_notes_multitopic.md"}
+{"proposition_id": "prop_011", "text": "Demand response shifts usage to reduce peak strain.", "source_doc": "raw/academic_papers/rl_energy_dense.md"}
+{"proposition_id": "prop_012", "text": "The grid is modeled as an MDP with load, storage, and renewable output.", "source_doc": "raw/academic_papers/rl_energy_dense.md"}
+{"proposition_id": "prop_013", "text": "PPO reduces peak demand by roughly twelve percent.", "source_doc": "raw/academic_papers/rl_energy_dense.md"}
+{"proposition_id": "prop_014", "text": "Entropy coefficient tuning is required for dense policy gradients.", "source_doc": "raw/academic_papers/rl_energy_dense.md"}

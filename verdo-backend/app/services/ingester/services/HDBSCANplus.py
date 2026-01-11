@@ -102,6 +102,8 @@ class HDBSCANplus:
         x = self.prepareData(embeddings)
         n = int(x.shape[0])
 
+        self._logRunStats(x)
+
         if n == 0:
             empty = HdbscanPlusResult(
                 labels=np.array([], dtype=np.int32),
@@ -129,6 +131,8 @@ class HDBSCANplus:
 
         result = self.makeResultFromTrial(best, tried=tried)
         self.bestResult = result
+        self._logBestTrial(best)
+        self._logTopTrials(tried, top_k=min(5, len(tried)))
         return result
 
     # ----------------------- deps / sanity -----------------------
@@ -177,6 +181,7 @@ class HDBSCANplus:
 
             trial = self.evaluateTrial(x, params)
             tried[key] = trial
+            self._logTrial(trial)
 
             if len(tried) >= self.expandTopK or not candidates:
                 self._expandTopK(tried, expanded, candidates, ranges)
@@ -339,19 +344,31 @@ class HDBSCANplus:
                 "labels": labels,
                 "probabilities": probs,
                 "error": str(exc),
-            }
+        }
 
         stats = self._clusterStats(labels)
         dbcvRaw = float(self.safeDbcv(x, labels))
-        dbcvNorm = self._normalizeDbcv(dbcvRaw)
+        dbcvValid = dbcvRaw != -1.0
+        if dbcvValid:
+            dbcvNorm = self._normalizeDbcv(dbcvRaw)
+            fallbackRaw = None
+            fallbackNorm = None
+        else:
+            fallbackRaw = float(self._fallbackValidity(x, labels))
+            fallbackNorm = self._normalizeDbcv(fallbackRaw)
+            dbcvNorm = fallbackNorm
         bicScore, bicRaw, bicNull = self._bicScore(x, labels)
 
         baseScore, gate, alpha = self._baseScore(dbcvNorm, bicScore)
         sanityPenalty, penaltyDetails = self._penalty(stats)
         mixedPenalty, mixedDetails = self._mixedPenalty(x, labels, params["minClusterSize"])
         gate = self.lambdaFloor + (1.0 - self.lambdaFloor) * dbcvNorm
-        mixedLambda = self.lambdaMax * gate
+        splitBoost = 1.0
+        if not dbcvValid and dbcvNorm < self.dbcvGate:
+            splitBoost = 1.0 + min(1.0, max(0.0, float(mixedPenalty)))
+        mixedLambda = self.lambdaMax * gate * splitBoost
         mixedDetails["lambdaGate"] = float(gate)
+        mixedDetails["splitBoost"] = float(splitBoost)
 
         score = baseScore - sanityPenalty - (mixedLambda * mixedPenalty)
 
@@ -361,6 +378,9 @@ class HDBSCANplus:
             "baseScore": float(baseScore),
             "dbcvRaw": float(dbcvRaw),
             "dbcvNorm": float(dbcvNorm),
+            "dbcvValid": bool(dbcvValid),
+            "fallbackRaw": fallbackRaw,
+            "fallbackNorm": fallbackNorm,
             "bicRaw": float(bicRaw),
             "bicNull": float(bicNull),
             "bicScore": float(bicScore),
@@ -435,6 +455,58 @@ class HDBSCANplus:
             return float(dbcvValidityIndex(x, labels))
         except Exception:
             return -1.0
+
+    def _fallbackValidity(self, x, labels):
+        labels = np.asarray(labels)
+        mask = labels != -1
+        if int(mask.sum()) == 0:
+            return -1.0
+
+        x_use = np.asarray(x[mask], dtype=np.float64)
+        labels_use = labels[mask]
+        labs = [l for l in sorted(set(labels_use.tolist())) if l != -1]
+        if len(labs) < 2:
+            return -1.0
+
+        centroids = {}
+        for lab in labs:
+            pts = x_use[labels_use == lab]
+            if pts.size == 0:
+                continue
+            centroids[lab] = pts.mean(axis=0)
+
+        if len(centroids) < 2:
+            return -1.0
+
+        sample_size = min(200, x_use.shape[0])
+        rng = np.random.default_rng(self.randomState)
+        sample_idx = rng.choice(x_use.shape[0], size=sample_size, replace=False)
+        scores = []
+        for idx in sample_idx:
+            pt = x_use[idx]
+            lab = labels_use[idx]
+            centroid = centroids.get(lab)
+            if centroid is None:
+                continue
+            a = float(np.linalg.norm(pt - centroid))
+            b = None
+            for other_lab, other_centroid in centroids.items():
+                if other_lab == lab:
+                    continue
+                dist = float(np.linalg.norm(pt - other_centroid))
+                if b is None or dist < b:
+                    b = dist
+            if b is None:
+                continue
+            denom = max(a, b)
+            if denom == 0.0:
+                scores.append(0.0)
+            else:
+                scores.append((b - a) / denom)
+
+        if not scores:
+            return -1.0
+        return float(np.mean(scores))
 
     def _normalizeDbcv(self, dbcvRaw):
         return float(max(0.0, min(1.0, (float(dbcvRaw) + 1.0) / 2.0)))
@@ -618,6 +690,9 @@ class HDBSCANplus:
             "baseScore": float(best.get("baseScore", -1.0)),
             "dbcvRaw": float(best.get("dbcvRaw", -1.0)),
             "dbcvNorm": float(best.get("dbcvNorm", 0.0)),
+            "dbcvValid": bool(best.get("dbcvValid", True)),
+            "fallbackRaw": best.get("fallbackRaw", None),
+            "fallbackNorm": best.get("fallbackNorm", None),
             "bicRaw": float(best.get("bicRaw", -1.0)),
             "bicNull": float(best.get("bicNull", -1.0)),
             "bicScore": float(best.get("bicScore", 0.0)),
