@@ -22,6 +22,7 @@ class Chunker:
 		self.idToElementIndex = {}   # Map non-figure ID -> index in self.elements
 		
 		self.propositions = []
+		self.propositionSources = [] # List[List[str]] of element IDs per proposition
 		self.batches = []            # list of {indices: [], text: ""}
 		self.chunks = []
 		
@@ -152,6 +153,7 @@ class Chunker:
 	def getPropositions(self):
 		self.llm = LLM()
 		self.propositions = []
+		self.propositionSources = []
 
 		# Prepare futures for all batches
 		futures = []
@@ -180,12 +182,15 @@ class Chunker:
 				try:
 					data = json.loads(response)
 					props = data.get("propositions", [])
+					source_ids = [self.elementMetas[idx]["id"] for idx in self.batches[i]["indices"]]
 					if isinstance(props, list):
 						self.propositions.extend(props)
+						self.propositionSources.extend([source_ids for _ in props])
 					else:
 						# Fallback if top level is list or other issue
 						if isinstance(data, list):
 							self.propositions.extend(data)
+							self.propositionSources.extend([source_ids for _ in data])
 						else:
 							print(f"Warning: JSON output in batch {i} did not contain 'propositions' list.")
 				except json.JSONDecodeError as e:
@@ -258,6 +263,8 @@ class Chunker:
 			indices = clusters[label]
 			chunkPropositions = []
 			acceptedIndices = []
+			figureIds = set()
+			sourceElementIds = set()
 			
 			# Calculate confidence for the cluster
 			clusterProbs = [probabilities[i] for i in indices]
@@ -279,7 +286,22 @@ class Chunker:
 				if not isDuplicate:
 					chunkPropositions.append(propText)
 					acceptedIndices.append(idx)
+					sourceElementIds.update(self.propositionSources[idx])
+					figureIds.update(re.findall(r"\[FIGURE ([^\]]+)\]", propText))
+
+			chunkEmbedding = None
+			if acceptedIndices:
+				acceptedEmbeddings = [self.propositionEmbeddings[i] for i in acceptedIndices]
+				chunkEmbedding = np.mean(np.array(acceptedEmbeddings, dtype=np.float32), axis=0).tolist()
 
 			# Create chunk object
-			chunk = Chunk(f"chunk_{len(self.semanticChunks):04d}", chunkPropositions)
+			chunk = Chunk(
+				f"chunk_{len(self.semanticChunks):04d}",
+				chunkPropositions,
+				confidence=confidence,
+				embedding=chunkEmbedding,
+				figure_ids=sorted(figureIds),
+				source_element_ids=sorted(sourceElementIds),
+				relations={},
+			)
 			self.semanticChunks.append(chunk)
