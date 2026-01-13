@@ -5,16 +5,28 @@ from pathlib import Path
 
 # --- Setup --------------------------------------------------------------
 
-# Adjust sys.path to allow imports if run directly
-if __name__ == "__main__":
-	PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-	sys.path.insert(0, str(PROJECT_ROOT))
+# Resolve project root (expects 'app' dir present up the tree)
+PROJECT_ROOT = Path(__file__).resolve()
+for _ in range(8):
+	if (PROJECT_ROOT / 'app').exists():
+		break
+	PROJECT_ROOT = PROJECT_ROOT.parent
+
+sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
+	from dotenv import load_dotenv
+	load_dotenv(PROJECT_ROOT / "app" / "services" / ".env")
+except Exception:
+	pass
+
+try:
+	from app.services.ingester.services.AgenticConceptBuilder import AgenticConceptBuilder
 	from app.services.ingester.services.chunker import Chunker
 except ImportError:
 	# Fallback for direct execution if package structure varies
 	sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+	from app.services.ingester.services.AgenticConceptBuilder import AgenticConceptBuilder
 	from app.services.ingester.services.chunker import Chunker
 
 # --- Main ---------------------------------------------------------------
@@ -67,6 +79,11 @@ def main():
 	print("Building semantic chunks...")
 	chunker.buildSemanticChunks()
 	
+	print("Building concept graph...")
+	conceptBuilder = AgenticConceptBuilder()
+	graph = conceptBuilder.buildGraph(chunker)
+	print(f"Graph nodes: {len(graph['nodes'])}, edges: {len(graph['edges'])}")
+	
 	print(f"\n--- Semantic Chunks ({len(chunker.semanticChunks)}) ---\n")
 	
 	for chunk in chunker.semanticChunks:
@@ -75,7 +92,7 @@ def main():
 			print(f"- {prop}")
 		print("") # clear line between clusters
 
-	# print(f"\nSaved chunks to {outputFile}")
+	return graph
 
 if __name__ == "__main__":
 	main()
