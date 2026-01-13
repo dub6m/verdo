@@ -1,10 +1,15 @@
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
 from app.services.ingester.services.LLM import LLM
 from app.services.ingester.services.chunk import Chunk
+
+ANN_PLANES = 12
+ANN_SEED = 42
+ANN_TABLES = 6
 
 
 @dataclass
@@ -112,31 +117,150 @@ def _addRelatedChunkEdges(
 	relatedThreshold: float,
 	llm: Optional[LLM],
 ):
+	if len(chunks) <= relatedTopK + 1:
+		_addRelatedChunkEdgesExact(graph, chunks, relatedTopK, relatedThreshold, llm)
+		return
+
+	_addRelatedChunkEdgesAnn(graph, chunks, relatedTopK, relatedThreshold, llm)
+
+
+# Builds related_to edges using full pairwise comparisons for small corpora
+def _addRelatedChunkEdgesExact(
+	graph: IngestionGraph,
+	chunks: List[Chunk],
+	relatedTopK: int,
+	relatedThreshold: float,
+	llm: Optional[LLM],
+):
 	embeddings = [chunk.embedding for chunk in chunks]
 	for idx, chunk in enumerate(chunks):
 		if embeddings[idx] is None:
 			continue
+
 		sims = []
-		for otherIdx, otherChunk in enumerate(chunks):
+		for otherIdx, _ in enumerate(chunks):
 			if idx == otherIdx or embeddings[otherIdx] is None:
 				continue
 			score = _cosineSimilarity(embeddings[idx], embeddings[otherIdx])
 			sims.append((otherIdx, score))
 
-		sims.sort(key=lambda item: item[1], reverse=True)
-		for otherIdx, score in sims[:relatedTopK]:
-			if score < relatedThreshold:
+		_addRelatedCandidates(graph, chunk, chunks, sims, relatedTopK, relatedThreshold, llm)
+
+
+# Builds related_to edges using ANN candidate selection
+def _addRelatedChunkEdgesAnn(
+	graph: IngestionGraph,
+	chunks: List[Chunk],
+	relatedTopK: int,
+	relatedThreshold: float,
+	llm: Optional[LLM],
+):
+	embeddings = [chunk.embedding for chunk in chunks]
+	buckets, planes, validIndices = _buildAnnIndex(
+		embeddings,
+		numTables=ANN_TABLES,
+		numPlanes=ANN_PLANES,
+		seed=ANN_SEED,
+	)
+	if not planes:
+		return
+
+	for idx, chunk in enumerate(chunks):
+		if embeddings[idx] is None or idx not in validIndices:
+			continue
+
+		candidates = _getAnnCandidates(idx, embeddings, buckets, planes)
+		if not candidates:
+			continue
+
+		sims = []
+		for otherIdx in candidates:
+			if embeddings[otherIdx] is None:
 				continue
-			description = _describeRelation(chunk, chunks[otherIdx], score, llm)
-			graph.addEdge(GraphEdge(
-				from_id=chunk.id,
-				to_id=chunks[otherIdx].id,
-				type="related_to",
-				evidence="semantic_similarity",
-				description=description,
-				kind="semantic_similarity",
-				score=float(score),
-			))
+			score = _cosineSimilarity(embeddings[idx], embeddings[otherIdx])
+			sims.append((otherIdx, score))
+
+		_addRelatedCandidates(graph, chunk, chunks, sims, relatedTopK, relatedThreshold, llm)
+
+
+# Creates related_to edges from scored candidates
+def _addRelatedCandidates(
+	graph: IngestionGraph,
+	chunk: Chunk,
+	chunks: List[Chunk],
+	sims: List[Tuple[int, float]],
+	relatedTopK: int,
+	relatedThreshold: float,
+	llm: Optional[LLM],
+):
+	sims.sort(key=lambda item: item[1], reverse=True)
+	for otherIdx, score in sims[:relatedTopK]:
+		if score < relatedThreshold:
+			continue
+		description = _describeRelation(chunk, chunks[otherIdx], score, llm)
+		graph.addEdge(GraphEdge(
+			from_id=chunk.id,
+			to_id=chunks[otherIdx].id,
+			type="related_to",
+			evidence="semantic_similarity",
+			description=description,
+			kind="semantic_similarity",
+			score=float(score),
+		))
+
+
+# Builds ANN buckets for cosine similarity using random hyperplanes
+def _buildAnnIndex(
+	embeddings: List[Optional[List[float]]],
+	numTables: int,
+	numPlanes: int,
+	seed: int,
+) -> Tuple[List[Dict[int, List[int]]], List[np.ndarray], Set[int]]:
+	validIndices = [idx for idx, emb in enumerate(embeddings) if emb is not None]
+	if not validIndices:
+		return [], [], set()
+
+	dimension = len(embeddings[validIndices[0]])
+	rng = np.random.RandomState(seed)
+	planes = [
+		rng.normal(size=(numPlanes, dimension)).astype(np.float32)
+		for _ in range(numTables)
+	]
+	buckets = [defaultdict(list) for _ in range(numTables)]
+
+	for idx in validIndices:
+		vector = np.array(embeddings[idx], dtype=np.float32)
+		for tableIdx, plane in enumerate(planes):
+			signature = _hashSignature(plane, vector)
+			buckets[tableIdx][signature].append(idx)
+
+	return buckets, planes, set(validIndices)
+
+
+# Returns ANN candidates from matching buckets
+def _getAnnCandidates(
+	idx: int,
+	embeddings: List[Optional[List[float]]],
+	buckets: List[Dict[int, List[int]]],
+	planes: List[np.ndarray],
+) -> Set[int]:
+	vector = np.array(embeddings[idx], dtype=np.float32)
+	candidates = set()
+	for tableIdx, plane in enumerate(planes):
+		signature = _hashSignature(plane, vector)
+		candidates.update(buckets[tableIdx].get(signature, []))
+
+	candidates.discard(idx)
+	return candidates
+
+
+# Hashes a vector against hyperplanes
+def _hashSignature(planes: np.ndarray, vector: np.ndarray) -> int:
+	projections = planes @ vector
+	signature = 0
+	for value in projections:
+		signature = (signature << 1) | (1 if value >= 0 else 0)
+	return signature
 
 
 def _cosineSimilarity(vecA: List[float], vecB: List[float]) -> float:
