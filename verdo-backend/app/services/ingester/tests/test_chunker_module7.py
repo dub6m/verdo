@@ -21,13 +21,13 @@ except Exception:
 	pass
 
 try:
-	from app.services.ingester.services.AgenticConceptBuilder import AgenticConceptBuilder
 	from app.services.ingester.services.chunker import Chunker
+	from app.services.ingester.services.ingestion_graph import buildGraph
 except ImportError:
 	# Fallback for direct execution if package structure varies
 	sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-	from app.services.ingester.services.AgenticConceptBuilder import AgenticConceptBuilder
 	from app.services.ingester.services.chunker import Chunker
+	from app.services.ingester.services.ingestion_graph import buildGraph
 
 # --- Main ---------------------------------------------------------------
 
@@ -80,10 +80,9 @@ def main():
 	chunker.buildSemanticChunks()
 	
 	print("Building concept graph...")
-	conceptBuilder = AgenticConceptBuilder()
-	graph = conceptBuilder.buildGraph(chunker)
-	print(f"Graph nodes: {len(graph['nodes'])}, edges: {len(graph['edges'])}")
-	
+	graph = buildGraph(chunker.semanticChunks, chunker.figuresById)
+	print(f"Graph nodes: {len(graph.nodes)}, edges: {len(graph.edges)}")
+
 	print(f"\n--- Semantic Chunks ({len(chunker.semanticChunks)}) ---\n")
 	
 	for chunk in chunker.semanticChunks:

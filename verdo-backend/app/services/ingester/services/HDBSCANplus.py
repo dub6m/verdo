@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 import math
+import warnings
 import numpy as np
 
 try:
@@ -521,7 +522,13 @@ class HDBSCANplus:
             nonNoise = [l for l in labs if l != -1]
             if len(nonNoise) < 2:
                 return -1.0
-            return float(dbcvValidityIndex(x, labels))
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=RuntimeWarning,
+                    module=r"hdbscan\.validity",
+                )
+                return float(dbcvValidityIndex(x, labels))
         except Exception:
             return -1.0
 
