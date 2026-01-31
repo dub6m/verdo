@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
@@ -56,6 +57,9 @@ def buildGraph(
 	figuresById: Dict[str, dict],
 	relatedTopK: int = 3,
 	relatedThreshold: float = 0.8,
+	dependencyTopK: int = 3,
+	dependencyThreshold: float = 0.85,
+	enableDependencyEdges: bool = True,
 	llm: Optional[LLM] = None,
 ) -> IngestionGraph:
 	graph = IngestionGraph()
@@ -82,6 +86,8 @@ def buildGraph(
 
 	_addFigureEdges(graph, chunks, figuresById)
 	_addRelatedChunkEdges(graph, chunks, relatedTopK, relatedThreshold, llm)
+	if enableDependencyEdges:
+		_addDependencyEdges(graph, chunks, dependencyTopK, dependencyThreshold, llm)
 
 	return graph
 
@@ -117,89 +123,11 @@ def _addRelatedChunkEdges(
 	relatedThreshold: float,
 	llm: Optional[LLM],
 ):
-	if len(chunks) <= relatedTopK + 1:
-		_addRelatedChunkEdgesExact(graph, chunks, relatedTopK, relatedThreshold, llm)
-		return
-
-	_addRelatedChunkEdgesAnn(graph, chunks, relatedTopK, relatedThreshold, llm)
-
-
-# Builds related_to edges using full pairwise comparisons for small corpora
-def _addRelatedChunkEdgesExact(
-	graph: IngestionGraph,
-	chunks: List[Chunk],
-	relatedTopK: int,
-	relatedThreshold: float,
-	llm: Optional[LLM],
-):
-	embeddings = [chunk.embedding for chunk in chunks]
-	for idx, chunk in enumerate(chunks):
-		if embeddings[idx] is None:
-			continue
-
-		sims = []
-		for otherIdx, _ in enumerate(chunks):
-			if idx == otherIdx or embeddings[otherIdx] is None:
-				continue
-			score = _cosineSimilarity(embeddings[idx], embeddings[otherIdx])
-			sims.append((otherIdx, score))
-
-		_addRelatedCandidates(graph, chunk, chunks, sims, relatedTopK, relatedThreshold, llm)
-
-
-# Builds related_to edges using ANN candidate selection
-def _addRelatedChunkEdgesAnn(
-	graph: IngestionGraph,
-	chunks: List[Chunk],
-	relatedTopK: int,
-	relatedThreshold: float,
-	llm: Optional[LLM],
-):
-	embeddings = [chunk.embedding for chunk in chunks]
-	buckets, planes, validIndices = _buildAnnIndex(
-		embeddings,
-		numTables=ANN_TABLES,
-		numPlanes=ANN_PLANES,
-		seed=ANN_SEED,
-	)
-	if not planes:
-		return
-
-	for idx, chunk in enumerate(chunks):
-		if embeddings[idx] is None or idx not in validIndices:
-			continue
-
-		candidates = _getAnnCandidates(idx, embeddings, buckets, planes)
-		if not candidates:
-			continue
-
-		sims = []
-		for otherIdx in candidates:
-			if embeddings[otherIdx] is None:
-				continue
-			score = _cosineSimilarity(embeddings[idx], embeddings[otherIdx])
-			sims.append((otherIdx, score))
-
-		_addRelatedCandidates(graph, chunk, chunks, sims, relatedTopK, relatedThreshold, llm)
-
-
-# Creates related_to edges from scored candidates
-def _addRelatedCandidates(
-	graph: IngestionGraph,
-	chunk: Chunk,
-	chunks: List[Chunk],
-	sims: List[Tuple[int, float]],
-	relatedTopK: int,
-	relatedThreshold: float,
-	llm: Optional[LLM],
-):
-	sims.sort(key=lambda item: item[1], reverse=True)
-	for otherIdx, score in sims[:relatedTopK]:
-		if score < relatedThreshold:
-			continue
-		description = _describeRelation(chunk, chunks[otherIdx], score, llm)
+	similarityEdges = _collectSimilarityEdges(chunks, relatedTopK, relatedThreshold)
+	for idx, otherIdx, score in similarityEdges:
+		description = _describeRelation(chunks[idx], chunks[otherIdx], score, llm)
 		graph.addEdge(GraphEdge(
-			from_id=chunk.id,
+			from_id=chunks[idx].id,
 			to_id=chunks[otherIdx].id,
 			type="related_to",
 			evidence="semantic_similarity",
@@ -207,6 +135,160 @@ def _addRelatedCandidates(
 			kind="semantic_similarity",
 			score=float(score),
 		))
+
+def _collectSimilarityEdges(
+	chunks: List[Chunk],
+	topK: int,
+	threshold: float,
+) -> List[Tuple[int, int, float]]:
+	embeddings = [chunk.embedding for chunk in chunks]
+	if len(chunks) <= topK + 1:
+		return _collectSimilarityEdgesExact(chunks, embeddings, topK, threshold)
+	return _collectSimilarityEdgesAnn(chunks, embeddings, topK, threshold)
+
+
+def _collectSimilarityEdgesExact(
+	chunks: List[Chunk],
+	embeddings: List[Optional[List[float]]],
+	topK: int,
+	threshold: float,
+) -> List[Tuple[int, int, float]]:
+	edges: List[Tuple[int, int, float]] = []
+	for idx, _chunk in enumerate(chunks):
+		if embeddings[idx] is None:
+			continue
+
+		sims: List[Tuple[int, float]] = []
+		for otherIdx, _ in enumerate(chunks):
+			if idx == otherIdx or embeddings[otherIdx] is None:
+				continue
+			score = _cosineSimilarity(embeddings[idx], embeddings[otherIdx])
+			sims.append((otherIdx, score))
+
+		sims.sort(key=lambda item: item[1], reverse=True)
+		for otherIdx, score in sims[:topK]:
+			if score < threshold:
+				continue
+			edges.append((idx, otherIdx, score))
+	return edges
+
+
+def _collectSimilarityEdgesAnn(
+	chunks: List[Chunk],
+	embeddings: List[Optional[List[float]]],
+	topK: int,
+	threshold: float,
+) -> List[Tuple[int, int, float]]:
+	edges: List[Tuple[int, int, float]] = []
+	buckets, planes, validIndices = _buildAnnIndex(
+		embeddings,
+		numTables=ANN_TABLES,
+		numPlanes=ANN_PLANES,
+		seed=ANN_SEED,
+	)
+	if not planes:
+		return edges
+
+	for idx, _chunk in enumerate(chunks):
+		if embeddings[idx] is None or idx not in validIndices:
+			continue
+
+		candidates = _getAnnCandidates(idx, embeddings, buckets, planes)
+		if not candidates:
+			continue
+
+		sims: List[Tuple[int, float]] = []
+		for otherIdx in candidates:
+			if embeddings[otherIdx] is None:
+				continue
+			score = _cosineSimilarity(embeddings[idx], embeddings[otherIdx])
+			sims.append((otherIdx, score))
+
+		sims.sort(key=lambda item: item[1], reverse=True)
+		for otherIdx, score in sims[:topK]:
+			if score < threshold:
+				continue
+			edges.append((idx, otherIdx, score))
+	return edges
+
+
+def _addDependencyEdges(
+	graph: IngestionGraph,
+	chunks: List[Chunk],
+	dependencyTopK: int,
+	dependencyThreshold: float,
+	llm: Optional[LLM],
+):
+	similarityEdges = _collectSimilarityEdges(chunks, dependencyTopK, dependencyThreshold)
+	for idx, otherIdx, score in similarityEdges:
+		chunkA = chunks[idx]
+		chunkB = chunks[otherIdx]
+		direction, reason = _inferDependencyDirection(chunkA, chunkB, llm)
+		if direction == "a_to_b":
+			graph.addEdge(GraphEdge(
+				from_id=chunkA.id,
+				to_id=chunkB.id,
+				type="requires",
+				evidence="semantic_similarity",
+				description=reason,
+				kind="dependency",
+				score=float(score),
+			))
+			continue
+		if direction == "b_to_a":
+			graph.addEdge(GraphEdge(
+				from_id=chunkB.id,
+				to_id=chunkA.id,
+				type="requires",
+				evidence="semantic_similarity",
+				description=reason,
+				kind="dependency",
+				score=float(score),
+			))
+			continue
+		graph.addEdge(GraphEdge(
+			from_id=chunkA.id,
+			to_id=chunkB.id,
+			type="dependency_candidate",
+			evidence="semantic_similarity",
+			description="Semantic similarity suggests a potential dependency; direction unresolved.",
+			kind="dependency_candidate",
+			score=float(score),
+		))
+
+
+def _inferDependencyDirection(
+	chunkA: Chunk,
+	chunkB: Chunk,
+	llm: Optional[LLM],
+) -> Tuple[str, str]:
+	if llm is None:
+		return "unknown", "No dependency direction model provided."
+
+	prompt = (
+		"Determine prerequisite direction between two knowledge chunks.\n"
+		"Return JSON with keys:\n"
+		'{"direction": "A->B" | "B->A" | "none", "reason": "<short reason>"}\n\n'
+		f"Chunk A propositions:\n{_formatPropositions(chunkA.data)}\n\n"
+		f"Chunk B propositions:\n{_formatPropositions(chunkB.data)}\n"
+	)
+	response = llm.chat(
+		messages=[{"role": "user", "content": prompt}],
+		model="gpt-4o",
+		response_format={"type": "json_object"},
+	)
+	try:
+		data = json.loads(response)
+	except json.JSONDecodeError:
+		return "unknown", "Dependency direction parse failed."
+
+	direction = str(data.get("direction", "")).strip().upper()
+	reason = str(data.get("reason", "")).strip()
+	if direction == "A->B":
+		return "a_to_b", reason or "Chunk A is a prerequisite for Chunk B."
+	if direction == "B->A":
+		return "b_to_a", reason or "Chunk B is a prerequisite for Chunk A."
+	return "none", reason or "No prerequisite relation identified."
 
 
 # Builds ANN buckets for cosine similarity using random hyperplanes
