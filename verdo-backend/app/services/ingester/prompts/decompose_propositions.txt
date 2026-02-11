@@ -13,18 +13,18 @@ RULES
    - Do NOT add commentary, interpretation, or new claims that are not clearly implied by the Text.
 
 2. Separate Named Entity Descriptions
-   - If a named entity (e.g., “Georg Franck von Franckenau”) includes descriptive information
-     (e.g., “professor of medicine”), put that description into its own proposition.
+   - If a named entity (e.g., "Georg Franck von Franckenau") includes descriptive information
+     (e.g., "professor of medicine"), put that description into its own proposition.
    - Example:
      - "Georg Franck von Franckenau was a professor of medicine."
 
 3. Decontextualize Every Proposition
    - Every proposition must stand alone.
-   - Replace pronouns like “it”, “he”, “she”, “they”, “this”, “that”, “these”, “those”, “here”, “there” with the full noun phrase they refer to (e.g. “the firm”, “the emissions fee”, “the recycling policy”).
+   - Replace pronouns like "it", "he", "she", "they", "this", "that", "these", "those", "here", "there" with the full noun phrase they refer to (e.g. "the firm", "the emissions fee", "the recycling policy").
    - If you CANNOT confidently determine the referent from the given Text and Context, then:
        - EITHER rewrite the sentence to remove the pronoun while preserving the meaning,
        - OR omit that proposition entirely.
-   - Do NOT leave any proposition that starts with or depends on “this”, “that”, “these changes”, “this solution”, etc. without an explicit noun.
+   - Do NOT leave any proposition that starts with or depends on "this", "that", "these changes", "this solution", etc. without an explicit noun.
 
 4. Preserve Mathematical and Numerical Content Exactly
    - When the Text contains equations, tables, numbers, parameters, or symbols, copy them exactly.
@@ -37,11 +37,17 @@ RULES
 
 6. Exclude Purely Layout/Visual or Trivial Meta Statements
    - Do NOT create propositions that only describe:
-       - the existence of a chart, figure, or photo (e.g. “A chart exists that is of the ‘other’ kind.”),
-       - axis labels or colors (e.g. “The chart has vertical axes labeled '$'.”, “The colors in the photo are gray and brown.”),
-       - generic references like “Example 18.4 presents data on X.” unless the example itself encodes a substantive fact.
+       - the existence of a chart, figure, or photo (e.g. "A chart exists that is of the 'other' kind."),
+       - axis labels or colors (e.g. "The chart has vertical axes labeled '$'.", "The colors in the photo are gray and brown."),
+       - generic references like "Example 18.4 presents data on X." unless the example itself encodes a substantive fact.
    - Only keep visual-related propositions if they express a substantive economic or conceptual fact
-     (e.g. “The chart shows that permit prices peaked in 2005 at nearly $1600.”).
+     (e.g. "The chart shows that permit prices peaked in 2005 at nearly $1600.").
+
+7. Link Relevant Figures
+   - Figures in the Context appear as [FIGURE id] placeholders.
+   - If a figure is clearly related to a proposition you're creating (the figure illustrates or supports the proposition's content), include [FIGURE id] in that proposition.
+   - Do this even if the original Text doesn't explicitly reference the figure, as long as the connection is clear.
+   - Example: If [FIGURE fig_18_1] shows a supply curve shifting right, and you create a proposition about supply curves shifting, include the reference: "The supply curve shifts right when demand increases [FIGURE fig_18_1]."
 
 OUTPUT FORMAT
 - Present the results as a JSON object with a single key "propositions".
@@ -56,7 +62,7 @@ The earliest evidence for the Easter Hare (Osterhase) was recorded in south-west
 other parts of Germany until the 18th century. Scholar Richard Sermon writes that "hares were
 frequently seen in gardens in spring, and thus may have served as a convenient explanation for the
 origin of the colored eggs hidden there for children. Alternatively, there is a European tradition
-that hares laid eggs, since a hare’s scratch or form and a lapwing’s nest look very similar, and
+that hares laid eggs, since a hare's scratch or form and a lapwing's nest look very similar, and
 both occur on grassland and are first seen in the spring. In the nineteenth century the influence
 of Easter cards, toys, and books was to make the Easter Hare/Rabbit popular throughout Europe.
 German immigrants then exported the custom to Britain and America where it evolved into the
@@ -72,8 +78,8 @@ Output: {{
     "Hares were frequently seen in gardens in spring.",
     "Hares may have served as a convenient explanation for the origin of the colored eggs hidden in gardens for children.",
     "There is a European tradition that hares laid eggs.",
-    "A hare’s scratch or form and a lapwing’s nest look very similar.",
-    "Both hares and lapwing’s nests occur on grassland and are first seen in the spring.",
+    "A hare's scratch or form and a lapwing's nest look very similar.",
+    "Both hares and lapwing's nests occur on grassland and are first seen in the spring.",
     "In the nineteenth century the influence of Easter cards, toys, and books was to make the Easter Hare/Rabbit popular throughout Europe.",
     "German immigrants exported the custom of the Easter Hare/Rabbit to Britain and America.",
     "The custom of the Easter Hare/Rabbit evolved into the Easter Bunny in Britain and America."

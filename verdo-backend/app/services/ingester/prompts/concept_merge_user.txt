@@ -1,0 +1,14 @@
+Review the following concepts and identify any that should be merged together.
+
+CONCEPTS:
+{concepts}
+
+For each concept, you see:
+- ID: unique identifier
+- Title: what the concept is about  
+- Summary: brief description of content
+- Proposition count: how many propositions it contains
+
+Decide which concepts (if any) should be merged, and which should remain unchanged.
+
+Return your response as a JSON object with "mergeGroups" and "unchanged" arrays.

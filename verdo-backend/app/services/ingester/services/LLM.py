@@ -116,7 +116,7 @@ class LLM:
 	def respond(
 		self,
 		prompt: str,
-		model: str = "gpt-4o",
+		model: str = "gpt-5-nano",
 		stream: bool = False,
 		**options: Any,
 	) -> str:
@@ -131,7 +131,7 @@ class LLM:
 	def chat(
 		self,
 		messages: Messages,
-		model: str = "gpt-4o",
+		model: str = "gpt-5-nano",
 		stream: bool = False,
 		**options: Any,
 	) -> str:
@@ -156,7 +156,7 @@ class LLM:
 	def respondAsync(
 		self,
 		prompt: str,
-		model: str = "gpt-4o",
+		model: str = "gpt-5-nano",
 		**options: Any,
 	) -> Future:
 		return self.submit(self.respond, prompt, model, **options)

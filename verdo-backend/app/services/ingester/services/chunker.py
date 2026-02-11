@@ -21,8 +21,7 @@ class Chunker:
 		self.order = []              # List of ALL element IDs in reading order
 		self.idToElementIndex = {}   # Map non-figure ID -> index in self.elements
 		
-		self.propositions = []
-		self.propositionSources = [] # List[List[str]] of element IDs per proposition
+		self.propositions = []       # List[dict] with {text, batchIndex, sourceElementIds}
 		self.batches = []            # list of {indices: [], text: ""}
 		self.chunks = []
 		
@@ -153,7 +152,6 @@ class Chunker:
 	def getPropositions(self):
 		self.llm = LLM()
 		self.propositions = []
-		self.propositionSources = []
 
 		# Prepare futures for all batches
 		futures = []
@@ -164,13 +162,13 @@ class Chunker:
 			# Build Context
 			contextItems = self._buildContextWindow(batchIndices, windowRadius=5)
 			contextText = "\n\n".join(contextItems)
-            
+			
 			prompt = DECOMPOSE_PROPOSITIONS_PROMPT.format(context=contextText, batch=batchText)
 			
 			# Using chatAsync which returns a Future
 			futures.append(self.llm.chatAsync(
 				messages=[{"role": "user", "content": prompt}], 
-				model="gpt-4o", 
+				model="gpt-5-nano", 
 				timeout=120,
 				response_format={"type": "json_object"}
 			))
@@ -182,15 +180,25 @@ class Chunker:
 				try:
 					data = json.loads(response)
 					props = data.get("propositions", [])
-					source_ids = [self.elementMetas[idx]["id"] for idx in self.batches[i]["indices"]]
+					sourceIds = [self.elementMetas[idx]["id"] for idx in self.batches[i]["indices"]]
+					batchIndex = i + 1  # 1-indexed for human readability
+					
 					if isinstance(props, list):
-						self.propositions.extend(props)
-						self.propositionSources.extend([source_ids for _ in props])
+						for propText in props:
+							self.propositions.append({
+								"text": propText,
+								"batchIndex": batchIndex,
+								"sourceElementIds": sourceIds
+							})
 					else:
 						# Fallback if top level is list or other issue
 						if isinstance(data, list):
-							self.propositions.extend(data)
-							self.propositionSources.extend([source_ids for _ in data])
+							for propText in data:
+								self.propositions.append({
+									"text": propText,
+									"batchIndex": batchIndex,
+									"sourceElementIds": sourceIds
+								})
 						else:
 							print(f"Warning: JSON output in batch {i} did not contain 'propositions' list.")
 				except json.JSONDecodeError as e:
@@ -199,15 +207,14 @@ class Chunker:
 			except Exception as e:
 				print(f"Error processing batch {i}: {e}")
 
-		# print(self.propositions) # Removed broad print
-
 	# Embeds all extracted propositions
 	def embedPropositions(self):
 		embedder = Embedder()
 		self.propositionEmbeddings = []
 		
 		for prop in self.propositions:
-			embedding = embedder.getEmbedding(prop)
+			propText = prop["text"] if isinstance(prop, dict) else prop
+			embedding = embedder.getEmbedding(propText)
 			self.propositionEmbeddings.append(embedding)
 			
 		if len(self.propositionEmbeddings) != len(self.propositions):

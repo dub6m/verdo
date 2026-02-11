@@ -1,0 +1,14 @@
+Group the following {count} propositions into educational concepts.
+
+The propositions appear in document order (earlier indices = earlier in source material). Use this order as a hint - related content tends to appear together.
+
+PROPOSITIONS:
+{propositions}
+
+INSTRUCTIONS:
+1. Look for natural groupings - definitions with their examples, formulas with their explanations
+2. Create FEWER, LARGER concepts (target 3-8 propositions each)
+3. Skip any meta-content (chapter intros, "we will discuss...", section transitions)
+4. Every proposition index (0 to {max_index}) must appear exactly once
+
+Return a JSON object with "concepts" array and optional "skipped" array.

@@ -29,3 +29,9 @@ DESCRIBE_FORMULA_PROMPT = _load_prompt('describe_formula.txt')
 DESCRIBE_TABLE_PROMPT = _load_prompt('describe_table.txt')
 DESCRIBE_TEXT_IMAGE_PROMPT = _load_prompt('describe_text_image.txt')
 DESCRIBE_FLOWCHART_PROMPT = _load_prompt('describe_flowchart.txt')
+
+# Concept Builder Prompts
+CONCEPT_CREATION_SYSTEM_PROMPT = _load_prompt('concept_creation_system.txt')
+CONCEPT_CREATION_USER_PROMPT = _load_prompt('concept_creation_user.txt')
+CONCEPT_MERGE_SYSTEM_PROMPT = _load_prompt('concept_merge_system.txt')
+CONCEPT_MERGE_USER_PROMPT = _load_prompt('concept_merge_user.txt')
