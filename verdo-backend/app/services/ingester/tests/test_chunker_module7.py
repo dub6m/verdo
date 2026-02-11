@@ -83,6 +83,10 @@ def main():
 	graph = buildGraph(chunker.semanticChunks, chunker.figuresById)
 	print(f"Graph nodes: {len(graph.nodes)}, edges: {len(graph.edges)}")
 
+	graphPath = PROJECT_ROOT / "out" / "Module7_graph.dot"
+	_write_graphviz(graph, graphPath)
+	print(f"Wrote graphviz output to {graphPath}")
+
 	print(f"\n--- Semantic Chunks ({len(chunker.semanticChunks)}) ---\n")
 	
 	for chunk in chunker.semanticChunks:
@@ -92,6 +96,28 @@ def main():
 		print("") # clear line between clusters
 
 	return graph
+
+
+def _write_graphviz(graph, path: Path) -> None:
+	lines = ["digraph IngestionGraph {"]
+	lines.append('  rankdir="LR";')
+	lines.append('  node [shape=box, fontsize=10];')
+
+	for node_id, node in graph.nodes.items():
+		label = f"{node.type}\\n{node_id}"
+		lines.append(f'  "{node_id}" [label="{label}"];')
+
+	for edge in graph.edges:
+		edge_label = f"{edge.type}"
+		if edge.score is not None:
+			edge_label += f" ({edge.score:.2f})"
+		lines.append(
+			f'  "{edge.from_id}" -> "{edge.to_id}" '
+			f'[label="{edge_label}", fontsize=9];'
+		)
+
+	lines.append("}")
+	path.write_text("\n".join(lines), encoding="utf-8")
 
 if __name__ == "__main__":
 	main()
