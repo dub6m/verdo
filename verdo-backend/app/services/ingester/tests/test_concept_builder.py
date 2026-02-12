@@ -22,6 +22,7 @@ except Exception:
 
 from app.services.ingester.services.chunker import Chunker
 from app.services.ingester.services.ConceptBuilder import ConceptBuilder
+from app.services.ingester.services.ingestion_graph import buildGraph
 
 # --- Main ---------------------------------------------------------------
 
@@ -29,6 +30,7 @@ def main():
 	# Path to Module7.json
 	inputFile = PROJECT_ROOT / "out" / "Module7.json"
 	outputFile = PROJECT_ROOT / "out" / "Module7_concepts_v2.json"
+	propositionsFile = PROJECT_ROOT / "out" / "Module7_propositions.json"
 
 	if not inputFile.exists():
 		print(f"Error: Input file not found at {inputFile}")
@@ -57,6 +59,18 @@ def main():
 	chunker.getPropositions()
 	print(f"   Generated {len(chunker.propositions)} propositions")
 
+	print(f"\n💾 Saving propositions to {propositionsFile}...")
+	with open(propositionsFile, "w", encoding="utf-8") as f:
+		json.dump(
+			{
+				"propositions": chunker.propositions,
+				"count": len(chunker.propositions),
+			},
+			f,
+			indent=2,
+			ensure_ascii=False,
+		)
+
 	# Preview a few propositions
 	print("\n   Sample propositions:")
 	for i, prop in enumerate(chunker.propositions[:3]):
@@ -74,9 +88,9 @@ def main():
 	print(f"\n📊 Statistics:")
 	print(f"   Total concepts: {stats['totalConcepts']}")
 	print(f"   Total propositions: {stats['totalPropositions']}")
-	print(f"   Avg propositions per concept: {stats.get('avgPropositionsPerConcept', 0):.1f}")
-	print(f"   Min propositions per concept: {stats.get('minPropositionsPerConcept', 0)}")
-	print(f"   Max propositions per concept: {stats.get('maxPropositionsPerConcept', 0)}")
+	print(f"   Avg propositions per concept: {stats.get('avgPropsPerConcept', 0):.1f}")
+	print(f"   Min propositions per concept: {stats.get('minProps', 0)}")
+	print(f"   Max propositions per concept: {stats.get('maxProps', 0)}")
 
 	# Print concepts
 	print(f"\n📚 Concepts ({len(concepts)}):")
@@ -92,11 +106,28 @@ def main():
 		if len(concept.propositions) > 3:
 			print(f"      ... and {len(concept.propositions) - 3} more")
 
+	# Step 5: Build concept DAG
+	print("\n🕸️ Step 5: Building concept DAG...")
+	graph = buildGraph(concepts, strict=True, autoDropCycleEdges=False)
+	print(f"   Graph nodes: {len(graph.nodes)}")
+	print(f"   Graph edges: {len(graph.edges)}")
+	order = graph.topologicalOrder()
+	print(f"   Topological order length: {len(order)}")
+
+	graphPath = PROJECT_ROOT / "out" / "Module7_concept_graph.dot"
+	_write_graphviz(graph, graphPath)
+	print(f"   Wrote graphviz output to {graphPath}")
+
 	# Save output
 	print(f"\n💾 Saving to {outputFile}...")
 	output = {
 		"stats": stats,
-		"concepts": conceptBuilder.getConceptsList()
+		"concepts": conceptBuilder.getConceptsList(),
+		"graph": {
+			"nodes": [vars(node) for node in graph.nodes.values()],
+			"edges": [vars(edge) for edge in graph.edges],
+			"topologicalOrder": order,
+		},
 	}
 	with open(outputFile, 'w', encoding='utf-8') as f:
 		json.dump(output, f, indent=2, ensure_ascii=False)
@@ -104,6 +135,26 @@ def main():
 	print(f"✅ Done! Saved {len(concepts)} concepts to {outputFile}")
 
 	return concepts
+
+
+def _write_graphviz(graph, path: Path) -> None:
+	lines = ["digraph ConceptGraph {"]
+	lines.append('  rankdir="LR";')
+	lines.append('  node [shape=box, fontsize=10];')
+
+	for node_id, node in graph.nodes.items():
+		title = node.data.get("title", "") if isinstance(node.data, dict) else ""
+		label = f"{title}\\n{node_id}" if title else node_id
+		lines.append(f'  "{node_id}" [label="{label}"];')
+
+	for edge in graph.edges:
+		lines.append(
+			f'  "{edge.from_id}" -> "{edge.to_id}" '
+			f'[label="{edge.type}", fontsize=9];'
+		)
+
+	lines.append("}")
+	path.write_text("\n".join(lines), encoding="utf-8")
 
 
 if __name__ == "__main__":

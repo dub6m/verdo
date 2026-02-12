@@ -1,0 +1,31 @@
+digraph ConceptGraph {
+  rankdir="LR";
+  node [shape=box, fontsize=10];
+  "c_dc5cd9bf" [label="Public Goods: Definition, Nonrivalry, and Financing\nc_dc5cd9bf"];
+  "c_77a92540" [label="Externalities and Social Costs: MSC vs MC and Efficient Output\nc_77a92540"];
+  "c_9691f19a" [label="Categories of Goods by Rivalry and Excludability with Examples\nc_9691f19a"];
+  "c_2b09119a" [label="Nonrival Goods, Social Marginal Benefit, and Valuation\nc_2b09119a"];
+  "c_98f74888" [label="Acid Rain Context and Environmental Damages\nc_98f74888"];
+  "c_2a95fb31" [label="Efficient Emission Level and E*\nc_2a95fb31"];
+  "c_8528ed50" [label="Definitions and Immediate Mechanisms of Emissions Instruments\nc_8528ed50"];
+  "c_1bec5476" [label="Cost, Abatement, and Information in Standards and Fees\nc_1bec5476"];
+  "c_a7063087" [label="Cap-and-Trade Fundamentals and Market Equilibrium\nc_a7063087"];
+  "c_28ed4cb6" [label="Historical Performance, Offsets, and Price Dynamics in Cap-and-Trade\nc_28ed4cb6"];
+  "c_67e502fd" [label="Private vs Social Costs and Efficiency in Waste Disposal\nc_67e502fd"];
+  "c_875a2a3f" [label="Glass Market Structure and Policy-Driven Supply Shifts\nc_875a2a3f"];
+  "c_b92a266a" [label="Recycling Policy Instruments and Their Effectiveness\nc_b92a266a"];
+  "c_aa666252" [label="National Waste Generation and Recycling Statistics\nc_aa666252"];
+  "c_6709e43b" [label="Stock Dynamics and Dissipation in Climate Policy\nc_6709e43b"];
+  "c_23e0d0da" [label="NPV, Discounting, and Policy Response under Stock Externalities\nc_23e0d0da"];
+  "c_1c8dc3a0" [label="Intertemporal Policy Evaluation: Social Discount Rate and Policy Tools\nc_1c8dc3a0"];
+  "c_3834925f" [label="Emissions, Climate Change Impacts, and Economic Damages\nc_3834925f"];
+  "c_279fe05a" [label="Measurement Units and Data Conventions in Climate Analysis\nc_279fe05a"];
+  "c_c85e7f17" [label="Data Tables and Baseline Projections in Policy Scenarios\nc_c85e7f17"];
+  "c_9b4cedfd" [label="Property Rights Allocation and Coase Bargaining Foundations\nc_9b4cedfd"];
+  "c_4b3925f9" [label="Case Illustrations: NYC–New Jersey and Private Bargaining Outcomes\nc_4b3925f9"];
+  "c_5197f819" [label="Common Property Resources and Fishing: Social Costs and Efficient Harvesting\nc_5197f819"];
+  "c_8eb39334" [label="Internalizing Externalities through Technology Choices\nc_8eb39334"];
+  "c_3df1a27c" [label="Bargaining, Costs, and the Possibility of Breakdowns in Multi-Party Externalities\nc_3df1a27c"];
+  "c_bfae9a6b" [label="Additional Coase-Style Outcomes: Damages, Payments, and Efficiency\nc_bfae9a6b"];
+  "c_7c342c9a" [label="Recovered Propositions\nc_7c342c9a"];
+}

@@ -39,7 +39,7 @@ class LLM:
 					max_keepalive_connections=self.maxWorkers,
 					max_connections=self.maxWorkers,
 				),
-				timeout=60.0,
+				timeout=300.0,
 			),
 		)
 

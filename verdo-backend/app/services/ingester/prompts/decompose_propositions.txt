@@ -4,6 +4,7 @@ GENERAL REQUIREMENTS
 - Each proposition must be a single, atomic fact or claim.
 - Each proposition must be understandable on its own, without needing to read any other sentence.
 - Use the surrounding Context to resolve references, but do NOT assume the reader sees that Context.
+- Each proposition must be concise (typically 8-35 words unless preserving equations/numbers requires more).
 
 RULES
 
@@ -43,7 +44,15 @@ RULES
    - Only keep visual-related propositions if they express a substantive economic or conceptual fact
      (e.g. "The chart shows that permit prices peaked in 2005 at nearly $1600.").
 
-7. Link Relevant Figures
+7. Avoid Generic or Weak Statements
+   - Do NOT output vague statements such as:
+       - "This is important."
+       - "The figure is related to the topic."
+       - "There are different factors."
+   - Every proposition must include specific subject matter content.
+   - Do NOT output section titles as propositions unless they encode a real claim.
+
+8. Link Relevant Figures
    - Figures in the Context appear as [FIGURE id] placeholders.
    - If a figure is clearly related to a proposition you're creating (the figure illustrates or supports the proposition's content), include [FIGURE id] in that proposition.
    - Do this even if the original Text doesn't explicitly reference the figure, as long as the connection is clear.
@@ -53,6 +62,7 @@ OUTPUT FORMAT
 - Present the results as a JSON object with a single key "propositions".
 - The value of "propositions" must be a list of strings.
 - Each string is exactly one proposition.
+- Do NOT output numbering, bullets, markdown, or any extra keys.
 
 Example:
 

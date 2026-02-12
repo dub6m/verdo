@@ -1,0 +1,38 @@
+{
+  "summary": {
+    "totalPropositions": 281,
+    "deterministicIssueCounts": {
+      "near_duplicates": 1,
+      "unresolved_pronoun_starts": 0,
+      "relative_references": 0,
+      "too_short": 0,
+      "too_long": 0,
+      "unknown_figure_refs": 0
+    }
+  },
+  "deterministic": {
+    "issueCounts": {
+      "near_duplicates": 1,
+      "unresolved_pronoun_starts": 0,
+      "relative_references": 0,
+      "too_short": 0,
+      "too_long": 0,
+      "unknown_figure_refs": 0
+    },
+    "exactDuplicates": [],
+    "nearDuplicatePairs": [
+      {
+        "i": 30,
+        "j": 36,
+        "jaccard": 0.9,
+        "text_i": "The efficient level of emissions is 12 units, denoted E*.",
+        "text_j": "The efficient level of emissions, E*, is 12 units."
+      }
+    ],
+    "unresolvedPronounStarts": [],
+    "relativeReferences": [],
+    "tooShort": [],
+    "tooLong": [],
+    "unknownFigureReferences": []
+  }
+}

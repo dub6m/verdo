@@ -11,6 +11,18 @@ from app.services.ingester.services.HDBSCANplus import HDBSCANplus
 from app.services.ingester.services.LLM import LLM
 from app.services.ingester.services.chunk import Chunk
 
+FIGURE_REF_RE = re.compile(r"\[FIGURE ([^\]]+)\]")
+UNRESOLVED_START_RE = re.compile(r"^\s*(this|that|it|these|those|they|such)\b", re.IGNORECASE)
+RELATIVE_REF_RE = re.compile(
+	r"\b(as (shown|noted|mentioned) (above|below)|see (above|below)|the (figure|table) above)\b",
+	re.IGNORECASE,
+)
+TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
+META_CONTENT_RE = re.compile(
+	r"^\s*(this|the)\s+(chapter|section)\b|^\s*in\s+this\s+(chapter|section)\b",
+	re.IGNORECASE,
+)
+
 # --- Classes ------------------------------------------------------------
 
 class Chunker:
@@ -152,6 +164,8 @@ class Chunker:
 	def getPropositions(self):
 		self.llm = LLM()
 		self.propositions = []
+		seenNormalized = set()
+		validFigureIds = set(self.figuresById.keys())
 
 		# Prepare futures for all batches
 		futures = []
@@ -185,8 +199,15 @@ class Chunker:
 					
 					if isinstance(props, list):
 						for propText in props:
+							cleaned = self._cleanPropositionText(str(propText), validFigureIds)
+							if not cleaned:
+								continue
+							normalized = self._normalizeForDedup(cleaned)
+							if normalized in seenNormalized:
+								continue
+							seenNormalized.add(normalized)
 							self.propositions.append({
-								"text": propText,
+								"text": cleaned,
 								"batchIndex": batchIndex,
 								"sourceElementIds": sourceIds
 							})
@@ -194,8 +215,15 @@ class Chunker:
 						# Fallback if top level is list or other issue
 						if isinstance(data, list):
 							for propText in data:
+								cleaned = self._cleanPropositionText(str(propText), validFigureIds)
+								if not cleaned:
+									continue
+								normalized = self._normalizeForDedup(cleaned)
+								if normalized in seenNormalized:
+									continue
+								seenNormalized.add(normalized)
 								self.propositions.append({
-									"text": propText,
+									"text": cleaned,
 									"batchIndex": batchIndex,
 									"sourceElementIds": sourceIds
 								})
@@ -206,6 +234,44 @@ class Chunker:
 					print(f"Response snippet: {response[:100]}...")
 			except Exception as e:
 				print(f"Error processing batch {i}: {e}")
+
+	def _cleanPropositionText(self, text: str, validFigureIds: set) -> str:
+		cleaned = " ".join(text.replace("\n", " ").split()).strip()
+		if not cleaned:
+			return ""
+
+		# Drop unresolved context-dependent starts.
+		if UNRESOLVED_START_RE.search(cleaned):
+			return ""
+
+		# Drop relative references that require layout context.
+		if RELATIVE_REF_RE.search(cleaned):
+			return ""
+
+		# Keep only known figure references.
+		def _figureRepl(match):
+			figId = match.group(1)
+			return match.group(0) if figId in validFigureIds else ""
+
+		cleaned = FIGURE_REF_RE.sub(_figureRepl, cleaned)
+		cleaned = " ".join(cleaned.split()).strip()
+		if not cleaned:
+			return ""
+
+		# Drop chapter/section boilerplate statements.
+		if META_CONTENT_RE.search(cleaned):
+			return ""
+
+		# Reject trivial statements.
+		tokenCount = len(TOKEN_RE.findall(cleaned))
+		if tokenCount < 5:
+			return ""
+
+		return cleaned
+
+	def _normalizeForDedup(self, text: str) -> str:
+		withoutFigures = FIGURE_REF_RE.sub("", text)
+		return re.sub(r"\s+", " ", withoutFigures.lower()).strip().strip(".")
 
 	# Embeds all extracted propositions
 	def embedPropositions(self):

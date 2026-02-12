@@ -1,7 +1,8 @@
 import json
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.services.ingester.prompts import (
 	CONCEPT_CREATION_SYSTEM_PROMPT,
@@ -13,9 +14,25 @@ from app.services.ingester.services.LLM import LLM
 
 # --- Constants --------------------------------------------------------------
 
-PHASE1_BATCH_SIZE = 40  # propositions per batch (increased for better context)
-PHASE2_MERGE_BATCH_SIZE = 15  # concepts per merge batch
-PHASE2_OVERLAP_SIZE = 4  # concepts from each side of boundary
+# If total propositions exceed this, split into batches + one merge pass
+MAX_SINGLE_PASS_PROPOSITIONS = 80
+MAX_PROPS_PER_CONCEPT = 25
+MAX_OVERLAP_RATIO = 0.35
+MIN_CONCEPT_SIZE = 4
+SEMANTIC_SPLIT_MODEL = "gpt-5-nano"
+REATTACH_MODEL = "gpt-5-nano"
+PURITY_MODEL = "gpt-5-nano"
+
+FIGURE_REF_RE = re.compile(r"\[FIGURE [^\]]+\]")
+NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]")
+THEME_KEYWORDS: Dict[str, Set[str]] = {
+	"public_goods": {"public", "good", "goods", "nonrival", "nonexclusive", "nonexcludable", "free", "rider", "valuation"},
+	"externalities": {"externality", "externalities", "mec", "msc", "msb", "meb", "social", "private", "coase", "rights", "bargaining"},
+	"emissions_policy": {"emissions", "pollution", "permit", "permits", "cap", "trade", "standard", "fee", "abatement", "offset"},
+	"waste_recycling": {"waste", "recycling", "recycle", "disposal", "deposit", "glass", "landfill", "trash"},
+	"climate": {"climate", "warming", "ghg", "co2", "temperature", "discount", "npv", "stock", "dissipation", "damage"},
+	"fisheries": {"fish", "fisherman", "fisheries", "lake", "harvest", "quota", "common", "property"},
+}
 
 # --- Data Classes -----------------------------------------------------------
 
@@ -25,9 +42,8 @@ class Concept:
 	title: str
 	summary: str
 	propositions: List[str] = field(default_factory=list)
-	propositionIndices: List[int] = field(default_factory=list)  # Global indices
-	originalBatchIndex: int = 0  # For tracking merge boundaries
-	prerequisites: List[str] = field(default_factory=list)  # For Phase 3
+	propositionIndices: List[int] = field(default_factory=list)
+	prerequisites: List[str] = field(default_factory=list)
 
 	def toDict(self) -> dict:
 		return asdict(self)
@@ -39,9 +55,9 @@ class ConceptBuilder:
 	"""
 	Builds educational concepts from propositions using LLM-based grouping.
 	
-	Phase 1: Group propositions into concepts within batches
-	Phase 2: Merge concepts across batch boundaries (2 rounds)
-	Phase 3: Extract prerequisites (TBD)
+	Strategy:
+	  - If propositions fit in one call → single-pass concept formation
+	  - If too many → split into 2-3 large batches, form concepts, then one merge pass
 	"""
 
 	def __init__(self, llmClient=None, printLogging: bool = True):
@@ -49,125 +65,86 @@ class ConceptBuilder:
 		self.printLogging = printLogging
 		self.concepts: Dict[str, Concept] = {}
 		self.allPropositions: List[dict] = []
-		self.skippedIndices: List[int] = []  # Track skipped meta-content
+
+	def log(self, msg: str):
+		if self.printLogging:
+			print(msg)
 
 	def buildConcepts(self, propositions: List[dict]) -> Dict[str, Concept]:
 		"""
-		Main entry point. Takes propositions and returns concepts.
+		Main entry point. Takes propositions, returns concepts.
 		
 		Args:
 			propositions: List of dicts with {text, batchIndex, sourceElementIds}
-		
-		Returns:
-			Dict of concept_id -> Concept
 		"""
 		self.allPropositions = propositions
+		n = len(propositions)
 
-		if self.printLogging:
-			print(f"\n{'='*70}")
-			print(f"🧠 CONCEPT BUILDER")
-			print(f"{'='*70}")
-			print(f"Total propositions: {len(propositions)}")
+		self.log(f"\n{'='*60}")
+		self.log(f"🧠 CONCEPT BUILDER — {n} propositions")
+		self.log(f"{'='*60}")
 
-		# Phase 1: Create concepts from proposition batches
-		self._phase1CreateConcepts()
-		conceptsBeforeMerge = len(self.concepts)
+		if n <= MAX_SINGLE_PASS_PROPOSITIONS:
+			# Single pass: send everything in one call
+			self.log(f"Strategy: Single-pass (all {n} propositions in one call)")
+			self.concepts = self._formConcepts(propositions, globalOffset=0)
+		else:
+			# Split into batches of ~100, process in parallel, then merge
+			import math
+			numBatches = math.ceil(n / MAX_SINGLE_PASS_PROPOSITIONS)
+			batchSize = math.ceil(n / numBatches)
+			self.log(f"Strategy: {numBatches} batches of ~{batchSize} + merge pass")
 
-		# Phase 2: Merge concepts (2 rounds)
-		self._phase2MergeConcepts()
-		conceptsAfterMerge = len(self.concepts)
+			# Create batches
+			batches = []
+			for i in range(0, n, batchSize):
+				batches.append((propositions[i:i + batchSize], i))
 
-		if self.printLogging:
-			print(f"\n{'='*70}")
-			print(f"✅ CONCEPT BUILDING COMPLETE")
-			print(f"{'='*70}")
-			print(f"Concepts before merge: {conceptsBeforeMerge}")
-			print(f"Concepts after merge: {conceptsAfterMerge}")
-			print(f"Skipped propositions: {len(self.skippedIndices)}")
-			
-			# Show distribution of concept sizes
-			sizes = [len(c.propositions) for c in self.concepts.values()]
-			if sizes:
-				avg = sum(sizes) / len(sizes)
-				print(f"Avg propositions per concept: {avg:.1f}")
-				print(f"Distribution: min={min(sizes)}, max={max(sizes)}")
-				
-				# Count concepts by size
-				single = sum(1 for s in sizes if s == 1)
-				small = sum(1 for s in sizes if 2 <= s <= 3)
-				medium = sum(1 for s in sizes if 4 <= s <= 7)
-				large = sum(1 for s in sizes if s >= 8)
-				print(f"Size breakdown: 1-prop={single}, 2-3={small}, 4-7={medium}, 8+={large}")
+			# Process batches in parallel
+			futures = []
+			for batchProps, offset in batches:
+				futures.append(self.llm.submit(self._formConcepts, batchProps, offset))
+
+			# Collect results
+			for future in futures:
+				try:
+					batchConcepts = future.result()
+					self.concepts.update(batchConcepts)
+				except Exception as e:
+					self.log(f"   ⚠️ Batch failed: {e}")
+
+			self.log(f"   Pre-merge: {len(self.concepts)} concepts")
+
+			# Single merge pass
+			self._mergeConcepts()
+
+		self._applyPostLlmGuards()
+
+		self.log(f"\n{'='*60}")
+		self.log(f"✅ DONE — {len(self.concepts)} final concepts")
+		self._printStats()
+		self.log(f"{'='*60}")
+
 
 		return self.concepts
 
 	# -------------------------------------------------------------------------
-	# Phase 1: Create Concepts
+	# Core: Form Concepts from Propositions
 	# -------------------------------------------------------------------------
 
-	def _phase1CreateConcepts(self):
-		"""Batch propositions and create concepts via LLM."""
-		if self.printLogging:
-			print(f"\n📦 PHASE 1: Creating concepts from propositions")
-
-		# Create batches of propositions
-		batches = []
-		for i in range(0, len(self.allPropositions), PHASE1_BATCH_SIZE):
-			batch = self.allPropositions[i:i + PHASE1_BATCH_SIZE]
-			batches.append({
-				"startIndex": i,
-				"propositions": batch
-			})
-
-		if self.printLogging:
-			print(f"   Batches: {len(batches)} (batch size: {PHASE1_BATCH_SIZE})")
-
-		# Process batches in parallel
-		futures = []
-		for batchIdx, batchData in enumerate(batches):
-			futures.append(self.llm.submit(
-				self._processBatchPhase1,
-				batchData["propositions"],
-				batchData["startIndex"],
-				batchIdx
-			))
-
-		# Collect results
-		for future in futures:
-			try:
-				batchConcepts, batchSkipped = future.result()
-				for concept in batchConcepts:
-					self.concepts[concept.id] = concept
-				self.skippedIndices.extend(batchSkipped)
-			except Exception as e:
-				print(f"   ⚠️ Error in Phase 1 batch: {e}")
-
-		if self.printLogging:
-			print(f"   Created {len(self.concepts)} initial concepts")
-			print(f"   Skipped {len(self.skippedIndices)} meta-content propositions")
-
-	def _processBatchPhase1(
-		self,
-		batchPropositions: List[dict],
-		globalStartIndex: int,
-		batchIdx: int
-	) -> tuple:
-		"""Process a single batch of propositions to create concepts.
-		
-		Returns:
-			Tuple of (concepts list, skipped indices list)
-		"""
-		# Format propositions for the prompt
+	def _formConcepts(self, propositions: List[dict], globalOffset: int) -> Dict[str, Concept]:
+		"""Send propositions to LLM and get back concepts."""
+		# Format propositions as numbered list
 		propLines = []
-		for i, prop in enumerate(batchPropositions):
-			propText = prop["text"] if isinstance(prop, dict) else prop
-			propLines.append(f"{i}. {propText}")
-		
+		for i, prop in enumerate(propositions):
+			text = prop["text"] if isinstance(prop, dict) else prop
+			propLines.append(f"{i}. {text}")
+
 		propositionsText = "\n".join(propLines)
-		
+
 		userPrompt = CONCEPT_CREATION_USER_PROMPT.format(
-			count=len(batchPropositions),
-			max_index=len(batchPropositions) - 1,
+			count=len(propositions),
+			max_index=len(propositions) - 1,
 			propositions=propositionsText
 		)
 
@@ -183,278 +160,67 @@ class ConceptBuilder:
 
 			data = json.loads(response)
 			conceptsData = data.get("concepts", [])
-			skippedLocal = data.get("skipped", [])
+			skipped = data.get("skipped", [])
 
-			# Convert skipped to global indices
-			skippedGlobal = [globalStartIndex + i for i in skippedLocal]
+			self.log(f"   LLM returned {len(conceptsData)} concepts, skipped {len(skipped)} propositions")
 
-			# Convert to Concept objects
-			concepts = []
+			# Build Concept objects
+			concepts = {}
 			for cData in conceptsData:
 				localIndices = cData.get("propositionIndices", [])
-				globalIndices = [globalStartIndex + i for i in localIndices]
-				
-				# Get proposition texts
+				globalIndices = [globalOffset + i for i in localIndices]
+
 				propTexts = []
 				for i in localIndices:
-					if 0 <= i < len(batchPropositions):
-						prop = batchPropositions[i]
+					if 0 <= i < len(propositions):
+						prop = propositions[i]
 						propTexts.append(prop["text"] if isinstance(prop, dict) else prop)
 
-				# Generate a proper UUID for this concept
 				conceptId = f"c_{uuid.uuid4().hex[:8]}"
-				
-				concept = Concept(
+				concepts[conceptId] = Concept(
 					id=conceptId,
 					title=cData.get("title", "Untitled"),
 					summary=cData.get("summary", ""),
 					propositions=propTexts,
 					propositionIndices=globalIndices,
-					originalBatchIndex=batchIdx
 				)
-				concepts.append(concept)
 
-			return concepts, skippedGlobal
+			return concepts
 
 		except Exception as e:
-			print(f"   ⚠️ Error parsing Phase 1 response: {e}")
-			# Fallback: each proposition becomes its own concept
-			fallbackConcepts = []
-			for i, prop in enumerate(batchPropositions):
-				propText = prop["text"] if isinstance(prop, dict) else prop
-				concept = Concept(
-					id=f"c_{uuid.uuid4().hex[:8]}",
-					title=f"Concept from proposition {globalStartIndex + i}",
-					summary=propText[:100] + "..." if len(propText) > 100 else propText,
-					propositions=[propText],
-					propositionIndices=[globalStartIndex + i],
-					originalBatchIndex=batchIdx
-				)
-				fallbackConcepts.append(concept)
-			return fallbackConcepts, []
+			self.log(f"   ⚠️ Error in concept formation: {e}")
+			import traceback
+			traceback.print_exc()
+			return {}
 
 	# -------------------------------------------------------------------------
-	# Phase 2: Merge Concepts
+	# Merge: One pass to combine concepts across batch boundaries
 	# -------------------------------------------------------------------------
 
-	def _phase2MergeConcepts(self):
-		"""Merge concepts in 3 rounds: standard, overlapping, then small concept cleanup."""
-		if self.printLogging:
-			print(f"\n🔄 PHASE 2: Merging concepts")
-			print(f"   Starting with {len(self.concepts)} concepts")
-
-		# Round 1: Standard batches
-		countBefore = len(self.concepts)
-		if self.printLogging:
-			print(f"   Round 1: Standard merge batches")
-		self._mergeRound(useOverlap=False)
-		if self.printLogging:
-			print(f"   After Round 1: {len(self.concepts)} concepts (merged {countBefore - len(self.concepts)})")
-
-		# Round 2: Overlapping batches to bridge boundaries
-		countBefore = len(self.concepts)
-		if self.printLogging:
-			print(f"   Round 2: Overlapping merge batches")
-		self._mergeRound(useOverlap=True)
-		if self.printLogging:
-			print(f"   After Round 2: {len(self.concepts)} concepts (merged {countBefore - len(self.concepts)})")
-
-		# Round 3: Small concept cleanup - merge single/small concepts into neighbors
-		countBefore = len(self.concepts)
-		if self.printLogging:
-			print(f"   Round 3: Small concept cleanup")
-		self._mergeSmallConcepts()
-		if self.printLogging:
-			print(f"   After Round 3: {len(self.concepts)} concepts (merged {countBefore - len(self.concepts)})")
-
-	def _mergeSmallConcepts(self):
-		"""Find single-proposition concepts and try to merge them with related larger concepts."""
-		# Get all concepts sorted by document order (using first proposition index)
-		sortedConcepts = sorted(
-			self.concepts.values(),
-			key=lambda c: min(c.propositionIndices) if c.propositionIndices else 0
-		)
-
-		# Find small concepts (1-2 propositions)
-		smallConcepts = [c for c in sortedConcepts if len(c.propositions) <= 2]
-		largerConcepts = [c for c in sortedConcepts if len(c.propositions) > 2]
-
-		if not smallConcepts or not largerConcepts:
+	def _mergeConcepts(self):
+		"""Single merge pass over all concepts."""
+		if len(self.concepts) <= 1:
 			return
 
-		if self.printLogging:
-			print(f"      Found {len(smallConcepts)} small concepts to evaluate")
+		self.log(f"\n🔄 Merge pass: reviewing {len(self.concepts)} concepts")
 
-		# Process in batches: each small concept paired with its neighbors
-		for smallConcept in smallConcepts[:]:  # Copy list since we modify during iteration
-			if smallConcept.id not in self.concepts:
-				continue  # Already merged
-
-			# Find nearby larger concepts (by document position)
-			smallPos = min(smallConcept.propositionIndices) if smallConcept.propositionIndices else 0
-			
-			# Get closest larger concepts
-			neighbors = sorted(
-				[c for c in largerConcepts if c.id in self.concepts],
-				key=lambda c: abs(min(c.propositionIndices) - smallPos) if c.propositionIndices else float('inf')
-			)[:3]  # Top 3 closest neighbors
-
-			if not neighbors:
-				continue
-
-			# Ask LLM if this small concept should merge with any neighbor
-			self._tryMergeSmallWithNeighbors(smallConcept, neighbors)
-
-	def _tryMergeSmallWithNeighbors(self, smallConcept: Concept, neighbors: List[Concept]):
-		"""Ask LLM if a small concept should be absorbed into one of its neighbors."""
-		# Build prompt
-		smallDesc = (
-			f"SMALL CONCEPT:\n"
-			f"  Title: {smallConcept.title}\n"
-			f"  Propositions: {smallConcept.propositions}\n"
-		)
-
-		neighborDescs = []
-		for i, n in enumerate(neighbors):
-			propSample = n.propositions[:3]
-			neighborDescs.append(
-				f"{i+1}. \"{n.title}\" ({len(n.propositions)} propositions)\n"
-				f"   Sample: {propSample[:2]}..."
-			)
-		neighborsText = "\n".join(neighborDescs)
-
-		prompt = f"""Should this small concept be merged into one of the larger concepts below?
-
-{smallDesc}
-
-CANDIDATE CONCEPTS TO MERGE INTO:
-{neighborsText}
-
-RULES:
-- Only merge if the small concept clearly belongs as part of the larger one
-- If it's a distinct topic, keep it separate (return "none")
-- Meta-content (author names, chapter intros) should be marked for deletion
-
-Return JSON: {{"action": "merge", "targetIndex": 1}} or {{"action": "keep"}} or {{"action": "delete"}}
-"""
-
-		try:
-			response = self.llm.chat(
-				messages=[{"role": "user", "content": prompt}],
-				model="gpt-5-nano",
-				response_format={"type": "json_object"}
-			)
-
-			data = json.loads(response)
-			action = data.get("action", "keep")
-
-			if action == "delete":
-				# Remove meta-content
-				del self.concepts[smallConcept.id]
-				if self.printLogging:
-					print(f"         🗑️ Deleted meta-content: \"{smallConcept.title}\"")
-				return
-
-			if action == "merge":
-				targetIdx = data.get("targetIndex", 1) - 1  # Convert to 0-indexed
-				if 0 <= targetIdx < len(neighbors):
-					target = neighbors[targetIdx]
-					if target.id in self.concepts and smallConcept.id in self.concepts:
-						# Merge into target
-						target.propositions.extend(smallConcept.propositions)
-						target.propositionIndices.extend(smallConcept.propositionIndices)
-						del self.concepts[smallConcept.id]
-						if self.printLogging:
-							print(f"         ↪️ Absorbed \"{smallConcept.title}\" into \"{target.title}\"")
-
-		except Exception as e:
-			pass  # Keep concept as-is on error
-
-	def _mergeRound(self, useOverlap: bool):
-		"""Execute one round of merging."""
-		# Sort concepts by their original batch index for consistent ordering
-		sortedConcepts = sorted(
-			self.concepts.values(),
-			key=lambda c: (c.originalBatchIndex, c.id)
-		)
-
-		if len(sortedConcepts) <= 1:
-			return
-
-		# Create batches for merging
-		if useOverlap:
-			# Overlapping batches: bridge the gaps between original batches
-			batches = self._createOverlapBatches(sortedConcepts)
-		else:
-			# Standard batches
-			batches = []
-			for i in range(0, len(sortedConcepts), PHASE2_MERGE_BATCH_SIZE):
-				batches.append(sortedConcepts[i:i + PHASE2_MERGE_BATCH_SIZE])
-
-		if not batches:
-			return
-
-		if self.printLogging:
-			print(f"      Processing {len(batches)} merge batches")
-
-		# Process merge batches (sequential to avoid conflicts)
-		for batchNum, batch in enumerate(batches):
-			if len(batch) < 2:
-				continue
-			self._processMergeBatch(batch, batchNum)
-
-	def _createOverlapBatches(self, sortedConcepts: List[Concept]) -> List[List[Concept]]:
-		"""Create overlapping batches that bridge original batch boundaries."""
-		batches = []
-		
-		# Group concepts by their original batch index
-		batchGroups: Dict[int, List[Concept]] = {}
-		for c in sortedConcepts:
-			if c.originalBatchIndex not in batchGroups:
-				batchGroups[c.originalBatchIndex] = []
-			batchGroups[c.originalBatchIndex].append(c)
-
-		# Create bridging batches between adjacent original batches
-		sortedBatchIndices = sorted(batchGroups.keys())
-		for i in range(len(sortedBatchIndices) - 1):
-			currentIdx = sortedBatchIndices[i]
-			nextIdx = sortedBatchIndices[i + 1]
-
-			currentConcepts = batchGroups[currentIdx]
-			nextConcepts = batchGroups[nextIdx]
-
-			# Take last N from current, first N from next
-			overlapFromCurrent = currentConcepts[-PHASE2_OVERLAP_SIZE:]
-			overlapFromNext = nextConcepts[:PHASE2_OVERLAP_SIZE]
-
-			bridgeBatch = overlapFromCurrent + overlapFromNext
-			if len(bridgeBatch) >= 2:
-				batches.append(bridgeBatch)
-
-		return batches
-
-	def _processMergeBatch(self, concepts: List[Concept], batchNum: int):
-		"""Process a batch of concepts to identify merges."""
-		# Format concepts for the prompt - include the actual proposition texts for context
+		# Format all concepts for the merge prompt
+		conceptsList = list(self.concepts.values())
 		conceptLines = []
-		conceptIds = []
-		for c in concepts:
-			conceptIds.append(c.id)
-			# Show first 2 propositions as sample
-			propSample = c.propositions[:2]
-			propPreview = "\n".join([f"     - {p[:80]}..." if len(p) > 80 else f"     - {p}" for p in propSample])
-			if len(c.propositions) > 2:
-				propPreview += f"\n     ... and {len(c.propositions) - 2} more"
-			
+		for c in conceptsList:
+			propSample = c.propositions[:3]
+			sampleText = "\n".join([f"     - {p[:80]}..." if len(p) > 80 else f"     - {p}" for p in propSample])
+			if len(c.propositions) > 3:
+				sampleText += f"\n     ... and {len(c.propositions) - 3} more"
+
 			conceptLines.append(
 				f"ID: {c.id}\n"
 				f"Title: {c.title}\n"
 				f"Summary: {c.summary}\n"
-				f"Propositions ({len(c.propositions)}):\n{propPreview}\n"
+				f"Propositions ({len(c.propositions)}):\n{sampleText}\n"
 			)
 
 		conceptsText = "\n---\n".join(conceptLines)
-
 		userPrompt = CONCEPT_MERGE_USER_PROMPT.format(concepts=conceptsText)
 
 		try:
@@ -470,83 +236,690 @@ Return JSON: {{"action": "merge", "targetIndex": 1}} or {{"action": "keep"}} or 
 			data = json.loads(response)
 			mergeGroups = data.get("mergeGroups", [])
 
-			if self.printLogging and mergeGroups:
-				print(f"      Batch {batchNum}: {len(mergeGroups)} merge groups found")
+			self.log(f"   Found {len(mergeGroups)} merge groups")
 
-			# Apply merges
 			for group in mergeGroups:
 				idsToMerge = group.get("conceptIds", [])
-				if len(idsToMerge) < 2:
-					continue
-
-				# Verify all IDs exist in current concepts (re-check since previous merges may have deleted some)
 				validIds = [cid for cid in idsToMerge if cid in self.concepts]
 				if len(validIds) < 2:
-					if self.printLogging:
-						print(f"         ⚠️ Skipping merge - only {len(validIds)} valid IDs found of {len(idsToMerge)} requested")
 					continue
 
-				# Merge into the first concept
-				primaryId = validIds[0]
-				if primaryId not in self.concepts:
-					continue  # Safety check
-				primaryConcept = self.concepts[primaryId]
+				primary = self.concepts[validIds[0]]
+				primary.title = group.get("mergedTitle", primary.title)
+				primary.summary = group.get("mergedSummary", primary.summary)
 
-				# Update title and summary
-				primaryConcept.title = group.get("mergedTitle", primaryConcept.title)
-				primaryConcept.summary = group.get("mergedSummary", primaryConcept.summary)
-
-				# Merge propositions from other concepts
-				mergedCount = 1
 				for otherId in validIds[1:]:
 					if otherId not in self.concepts:
-						continue  # Already merged in a previous group
-					otherConcept = self.concepts[otherId]
-					primaryConcept.propositions.extend(otherConcept.propositions)
-					primaryConcept.propositionIndices.extend(otherConcept.propositionIndices)
-					# Remove the merged concept
+						continue
+					other = self.concepts[otherId]
+					primary.propositions.extend(other.propositions)
+					primary.propositionIndices.extend(other.propositionIndices)
 					del self.concepts[otherId]
-					mergedCount += 1
 
-				if self.printLogging and mergedCount > 1:
-					print(f"         ✓ Merged {mergedCount} concepts -> \"{primaryConcept.title}\" ({len(primaryConcept.propositions)} props)")
+				self._dedupeConceptPropositions(primary)
+				self.log(f"   ✓ Merged {len(validIds)} → \"{primary.title}\" ({len(primary.propositions)} props)")
 
 		except Exception as e:
-			print(f"   ⚠️ Error in merge batch {batchNum}: {e}")
+			self.log(f"   ⚠️ Error in merge pass: {e}")
 			import traceback
 			traceback.print_exc()
 
 	# -------------------------------------------------------------------------
-	# Output Methods
+	# Output
 	# -------------------------------------------------------------------------
 
 	def getConceptsList(self) -> List[dict]:
-		"""Return concepts as a list of dictionaries."""
 		return [c.toDict() for c in self.concepts.values()]
 
 	def getConceptById(self, conceptId: str) -> Optional[dict]:
-		"""Get a specific concept by ID."""
 		if conceptId in self.concepts:
 			return self.concepts[conceptId].toDict()
 		return None
 
 	def getStats(self) -> dict:
-		"""Get statistics about the concept building process."""
 		if not self.concepts:
-			return {
-				"totalConcepts": 0,
-				"totalPropositions": len(self.allPropositions),
-				"skippedPropositions": len(self.skippedIndices),
-				"avgPropositionsPerConcept": 0,
-			}
+			return {"totalConcepts": 0, "totalPropositions": len(self.allPropositions)}
 
-		propCounts = [len(c.propositions) for c in self.concepts.values()]
+		sizes = [len(c.propositions) for c in self.concepts.values()]
 		return {
 			"totalConcepts": len(self.concepts),
 			"totalPropositions": len(self.allPropositions),
-			"skippedPropositions": len(self.skippedIndices),
-			"avgPropositionsPerConcept": sum(propCounts) / len(propCounts),
-			"minPropositionsPerConcept": min(propCounts),
-			"maxPropositionsPerConcept": max(propCounts),
-			"singlePropConcepts": sum(1 for s in propCounts if s == 1),
+			"avgPropsPerConcept": round(sum(sizes) / len(sizes), 1),
+			"minProps": min(sizes),
+			"maxProps": max(sizes),
+			"singlePropConcepts": sum(1 for s in sizes if s == 1),
 		}
+
+	def _printStats(self):
+		stats = self.getStats()
+		self.log(f"   Avg props/concept: {stats.get('avgPropsPerConcept', 0)}")
+		self.log(f"   Range: {stats.get('minProps', 0)}-{stats.get('maxProps', 0)}")
+		self.log(f"   Single-prop concepts: {stats.get('singlePropConcepts', 0)}")
+
+	def _applyPostLlmGuards(self):
+		self.log("\n🛡️  Post-LLM guards: assignment, size caps, overlap control")
+		self._dedupeAllConceptPropositions()
+		self._reconcileAssignments()
+		self._semanticSplitOversizedConcepts(MAX_PROPS_PER_CONCEPT)
+		self._enforceMaxConceptSize(MAX_PROPS_PER_CONCEPT)
+		self._runConceptPurityPass(minConceptSize=6)
+		self._reconcileAssignments()
+		self._reattachTinyConcepts(MIN_CONCEPT_SIZE)
+		self._reduceInterConceptOverlap(MAX_OVERLAP_RATIO)
+		self._reconcileAssignments()
+		self._dedupeAllConceptPropositions()
+		self._reconcileAssignments()
+		self._enforceMaxConceptSize(MAX_PROPS_PER_CONCEPT)
+		self._reconcileAssignments()
+		self._dropEmptyConcepts()
+		self._validateAssignments()
+
+	def _dedupeAllConceptPropositions(self):
+		for concept in self.concepts.values():
+			self._dedupeConceptPropositions(concept)
+
+	def _dedupeConceptPropositions(self, concept: Concept):
+		seenTexts = set()
+		seenIndices: Set[int] = set()
+		dedupedProps = []
+		dedupedIndices = []
+
+		pairs: List[tuple] = []
+		if concept.propositionIndices and len(concept.propositionIndices) == len(concept.propositions):
+			pairs = list(zip(concept.propositionIndices, concept.propositions))
+		else:
+			pairs = [(-1, text) for text in concept.propositions]
+
+		for idx, text in pairs:
+			normalized = self._normalizePropText(text)
+			if normalized in seenTexts:
+				continue
+			seenTexts.add(normalized)
+			dedupedProps.append(text)
+			if idx >= 0 and idx not in seenIndices:
+				seenIndices.add(idx)
+				dedupedIndices.append(idx)
+
+		# If we couldn't pair by index, keep existing index uniqueness separately.
+		if not dedupedIndices and concept.propositionIndices:
+			for idx in concept.propositionIndices:
+				if idx in seenIndices:
+					continue
+				seenIndices.add(idx)
+				dedupedIndices.append(idx)
+
+		concept.propositions = dedupedProps
+		concept.propositionIndices = dedupedIndices
+
+	def _normalizePropText(self, text: str) -> str:
+		normalized = str(text).strip().lower()
+		normalized = FIGURE_REF_RE.sub("", normalized)
+		normalized = NON_ALNUM_RE.sub(" ", normalized)
+		return " ".join(normalized.split())
+
+	def _reconcileAssignments(self):
+		if not self.allPropositions:
+			return
+
+		total = len(self.allPropositions)
+		indexOwners: Dict[int, List[str]] = {}
+		for conceptId, concept in self.concepts.items():
+			uniq = []
+			seen = set()
+			for idx in concept.propositionIndices:
+				if not isinstance(idx, int):
+					continue
+				if idx < 0 or idx >= total:
+					continue
+				if idx in seen:
+					continue
+				seen.add(idx)
+				uniq.append(idx)
+				indexOwners.setdefault(idx, []).append(conceptId)
+			concept.propositionIndices = uniq
+
+		# Resolve duplicate ownership deterministically: keep in larger concept.
+		for idx, owners in list(indexOwners.items()):
+			if len(owners) <= 1:
+				continue
+			ranked = sorted(
+				owners,
+				key=lambda cid: (len(self.concepts.get(cid, Concept("", "", "")).propositionIndices), cid),
+				reverse=True,
+			)
+			keeper = ranked[0]
+			for loser in ranked[1:]:
+				if loser not in self.concepts:
+					continue
+				self.concepts[loser].propositionIndices = [
+					i for i in self.concepts[loser].propositionIndices if i != idx
+				]
+
+		assigned = set()
+		for concept in self.concepts.values():
+			assigned.update(concept.propositionIndices)
+		missing = [idx for idx in range(total) if idx not in assigned]
+		if missing:
+			missing = self._reattachMissingPropositions(missing)
+		if missing:
+			recoveredId = f"c_{uuid.uuid4().hex[:8]}"
+			self.concepts[recoveredId] = Concept(
+				id=recoveredId,
+				title="Recovered Propositions",
+				summary="Automatically added to guarantee one-to-one proposition assignment.",
+				propositionIndices=missing,
+				propositions=[],
+			)
+			self.log(f"   Guard: recovered {len(missing)} missing propositions into '{recoveredId}'.")
+
+		self._refreshConceptTextsFromIndices()
+
+	def _refreshConceptTextsFromIndices(self):
+		for concept in self.concepts.values():
+			concept.propositionIndices = sorted(set(concept.propositionIndices))
+			props = []
+			for idx in concept.propositionIndices:
+				if 0 <= idx < len(self.allPropositions):
+					item = self.allPropositions[idx]
+					text = item["text"] if isinstance(item, dict) else str(item)
+					props.append(text)
+			concept.propositions = props
+
+	def _enforceMaxConceptSize(self, maxSize: int):
+		if maxSize <= 0:
+			return
+		newConcepts: Dict[str, Concept] = {}
+		for conceptId, concept in list(self.concepts.items()):
+			size = len(concept.propositionIndices)
+			if size <= maxSize:
+				newConcepts[conceptId] = concept
+				continue
+
+			chunks = [
+				concept.propositionIndices[i:i + maxSize]
+				for i in range(0, size, maxSize)
+			]
+			self.log(f"   Guard: split oversized concept '{concept.title}' ({size}) into {len(chunks)} parts.")
+
+			primaryChunk = chunks[0]
+			concept.propositionIndices = primaryChunk
+			concept.title = f"{concept.title} (Part 1)"
+			newConcepts[conceptId] = concept
+
+			for partIdx, chunk in enumerate(chunks[1:], start=2):
+				newId = f"c_{uuid.uuid4().hex[:8]}"
+				newConcepts[newId] = Concept(
+					id=newId,
+					title=f"{concept.title.rsplit(' (Part 1)', 1)[0]} (Part {partIdx})",
+					summary=concept.summary,
+					propositionIndices=chunk,
+					propositions=[],
+				)
+
+		self.concepts = newConcepts
+		self._refreshConceptTextsFromIndices()
+
+	def _semanticSplitOversizedConcepts(self, maxSize: int):
+		if maxSize <= 0:
+			return
+
+		updated: Dict[str, Concept] = {}
+		for conceptId, concept in list(self.concepts.items()):
+			size = len(concept.propositionIndices)
+			if size <= maxSize:
+				updated[conceptId] = concept
+				continue
+
+			subConcepts = self._splitConceptSemantically(concept, maxSize=maxSize)
+			if not subConcepts:
+				updated[conceptId] = concept
+				continue
+
+			self.log(
+				f"   Guard: semantic split '{concept.title}' ({size}) into {len(subConcepts)} sub-concepts."
+			)
+			for idx, sub in enumerate(subConcepts, start=1):
+				newId = conceptId if idx == 1 else f"c_{uuid.uuid4().hex[:8]}"
+				sub.id = newId
+				updated[newId] = sub
+
+		self.concepts = updated
+		self._refreshConceptTextsFromIndices()
+
+	def _splitConceptSemantically(self, concept: Concept, maxSize: int) -> List[Concept]:
+		local = []
+		for localIdx, globalIdx in enumerate(concept.propositionIndices):
+			if 0 <= globalIdx < len(self.allPropositions):
+				item = self.allPropositions[globalIdx]
+				text = item["text"] if isinstance(item, dict) else str(item)
+				local.append((localIdx, globalIdx, text))
+
+		if len(local) <= maxSize:
+			return []
+
+		lines = [f"{idx}. {text}" for idx, _global, text in local]
+		userPrompt = (
+			"Split the oversized educational concept into smaller, coherent teachable sub-concepts.\n"
+			f"Constraints:\n"
+			f"- Each sub-concept must contain between 4 and {maxSize} propositions when possible.\n"
+			"- Keep propositions that teach the same learning objective together.\n"
+			"- Use concise textbook-like titles.\n"
+			"- Do NOT create a generic catch-all concept.\n"
+			"- Sub-concept summaries must explicitly state a distinct learning objective.\n"
+			"- Every proposition index must appear exactly once across subConcepts.\n\n"
+			"Return JSON only:\n"
+			'{\n'
+			'  "subConcepts": [\n'
+			'    {"title":"...", "summary":"...", "propositionIndices":[0,1,2]}\n'
+			"  ]\n"
+			"}\n\n"
+			f"Oversized concept title: {concept.title}\n"
+			f"Oversized concept summary: {concept.summary}\n\n"
+			"Propositions (local indices):\n"
+			f"{chr(10).join(lines)}\n"
+		)
+
+		try:
+			raw = self.llm.chat(
+				messages=[
+					{"role": "system", "content": "You are splitting one educational concept into coherent sub-concepts."},
+					{"role": "user", "content": userPrompt},
+				],
+				model=SEMANTIC_SPLIT_MODEL,
+				response_format={"type": "json_object"},
+			)
+			data = json.loads(raw)
+			subConceptsData = data.get("subConcepts", [])
+			if not isinstance(subConceptsData, list) or not subConceptsData:
+				return []
+		except Exception as e:
+			self.log(f"   Guard: semantic split failed for '{concept.title}': {e}")
+			return []
+
+		indexMap = {localIdx: globalIdx for localIdx, globalIdx, _text in local}
+		usedLocal = set()
+		result: List[Concept] = []
+
+		for subData in subConceptsData:
+			localIndices = subData.get("propositionIndices", [])
+			if not isinstance(localIndices, list):
+				continue
+			validLocal = []
+			for idx in localIndices:
+				try:
+					idxInt = int(idx)
+				except Exception:
+					continue
+				if idxInt in indexMap and idxInt not in usedLocal:
+					validLocal.append(idxInt)
+					usedLocal.add(idxInt)
+
+			if not validLocal:
+				continue
+
+			globalIndices = [indexMap[idx] for idx in validLocal]
+			title = str(subData.get("title", "")).strip() or concept.title
+			summary = str(subData.get("summary", "")).strip() or concept.summary
+			result.append(Concept(
+				id=f"c_{uuid.uuid4().hex[:8]}",
+				title=title,
+				summary=summary,
+				propositionIndices=sorted(globalIndices),
+				propositions=[],
+			))
+
+		# Preserve any dropped indices instead of losing assignment.
+		missingLocal = [idx for idx in indexMap.keys() if idx not in usedLocal]
+		if missingLocal:
+			result.append(Concept(
+				id=f"c_{uuid.uuid4().hex[:8]}",
+				title=f"{concept.title} (Remainder)",
+				summary=concept.summary,
+				propositionIndices=sorted(indexMap[idx] for idx in missingLocal),
+				propositions=[],
+			))
+
+		if len(result) <= 1:
+			return []
+
+		return result
+
+	def _runConceptPurityPass(self, minConceptSize: int = 6):
+		targets = [
+			(cid, c) for cid, c in self.concepts.items()
+			if len(c.propositionIndices) >= minConceptSize
+		]
+		if not targets:
+			return
+
+		self.log(f"   Guard: running concept purity pass on {len(targets)} concepts.")
+
+		futures = []
+		for conceptId, concept in targets:
+			futures.append(self.llm.submit(self._purityKeepIndicesForConcept, conceptId, concept))
+
+		for future in futures:
+			try:
+				conceptId, keepLocal = future.result()
+			except Exception as e:
+				self.log(f"   Guard: purity check failed: {e}")
+				continue
+			if conceptId not in self.concepts or not keepLocal:
+				continue
+
+			concept = self.concepts[conceptId]
+			oldGlobal = concept.propositionIndices
+			keepSet = set(keepLocal)
+			newGlobal = [g for localIdx, g in enumerate(oldGlobal) if localIdx in keepSet]
+			if not newGlobal:
+				continue
+			if len(newGlobal) < len(oldGlobal):
+				self.log(
+					f"   Guard: purity trimmed concept '{concept.title}' "
+					f"from {len(oldGlobal)} to {len(newGlobal)} propositions."
+				)
+				concept.propositionIndices = newGlobal
+
+		self._refreshConceptTextsFromIndices()
+
+	def _purityKeepIndicesForConcept(self, conceptId: str, concept: Concept):
+		lines = [f"{i}. {text}" for i, text in enumerate(concept.propositions)]
+		prompt = (
+			"Given a concept objective and its proposition list, keep only propositions that directly fit the objective.\n"
+			"Return strict JSON:\n"
+			'{\n'
+			'  "keepIndices": [0,1,2],\n'
+			'  "dropIndices": [3]\n'
+			"}\n\n"
+			"Rules:\n"
+			"- Keep propositions that are directly on-topic for the objective.\n"
+			"- Drop propositions that are tangential, off-topic, or belong to another concept.\n"
+			"- Keep at least 60% unless the concept is clearly mixed.\n\n"
+			f"Concept title: {concept.title}\n"
+			f"Concept summary: {concept.summary}\n\n"
+			f"Propositions:\n{chr(10).join(lines)}\n"
+		)
+		raw = self.llm.chat(
+			messages=[
+				{"role": "system", "content": "You are a strict concept-quality reviewer."},
+				{"role": "user", "content": prompt},
+			],
+			model=PURITY_MODEL,
+			response_format={"type": "json_object"},
+		)
+		data = json.loads(raw)
+		keep = data.get("keepIndices", []) if isinstance(data, dict) else []
+		keepLocal = []
+		for idx in keep:
+			try:
+				i = int(idx)
+			except Exception:
+				continue
+			if 0 <= i < len(concept.propositions):
+				keepLocal.append(i)
+		if not keepLocal:
+			keepLocal = list(range(len(concept.propositions)))
+		return conceptId, sorted(set(keepLocal))
+
+	def _reattachTinyConcepts(self, minSize: int):
+		if minSize <= 1:
+			return
+		tinyIds = [
+			cid for cid, concept in self.concepts.items()
+			if 0 < len(concept.propositionIndices) < minSize
+		]
+		if not tinyIds:
+			return
+
+		for cid in tinyIds:
+			if cid not in self.concepts:
+				continue
+			concept = self.concepts[cid]
+			isRemainder = "(Remainder)" in concept.title or concept.title == "Recovered Propositions"
+			if not isRemainder and len(self.concepts) <= 6:
+				continue
+
+			moved = 0
+		for idx in list(concept.propositionIndices):
+			bestId = self._bestConceptByTokenOverlap(idx, excludeConceptId=cid)
+			if bestId is None:
+				bestId = self._bestConceptByThemeKeywords(idx, excludeConceptId=cid)
+			if bestId:
+				self.concepts[bestId].propositionIndices.append(idx)
+				moved += 1
+			if moved > 0:
+				self.log(
+					f"   Guard: reattached {moved} propositions from tiny concept '{concept.title}'."
+				)
+				concept.propositionIndices = []
+
+		self._dropEmptyConcepts()
+		self._refreshConceptTextsFromIndices()
+
+	def _reattachMissingPropositions(self, missing: List[int]) -> List[int]:
+		if not missing:
+			return []
+
+		conceptIds = list(self.concepts.keys())
+		if not conceptIds:
+			return missing
+
+		catalogBlocks = []
+		for conceptId, concept in self.concepts.items():
+			sample = concept.propositions[:3]
+			sampleText = "\n".join(f"- {s}" for s in sample)
+			catalogBlocks.append(
+				f"ID: {conceptId}\n"
+				f"Title: {concept.title}\n"
+				f"Summary: {concept.summary}\n"
+				f"Sample propositions:\n{sampleText}\n"
+			)
+		catalog = "\n---\n".join(catalogBlocks)
+
+		missingLines = []
+		for idx in missing:
+			if 0 <= idx < len(self.allPropositions):
+				item = self.allPropositions[idx]
+				text = item["text"] if isinstance(item, dict) else str(item)
+				missingLines.append(f"{idx}. {text}")
+		if not missingLines:
+			return missing
+
+		prompt = (
+			"Assign each missing proposition to the best existing concept.\n"
+			"Rules:\n"
+			"- Use only listed concept IDs.\n"
+			"- If no concept fits, leave it unassigned.\n"
+			"- Return strict JSON.\n\n"
+			"Output format:\n"
+			'{\n'
+			'  "assignments": [{"index": 12, "conceptId": "c_abc123"}],\n'
+			'  "unassigned": [45]\n'
+			"}\n\n"
+			f"Existing concepts:\n{catalog}\n\n"
+			f"Missing propositions:\n{chr(10).join(missingLines)}\n"
+		)
+
+		assignments = []
+		unassigned = set(missing)
+		try:
+			raw = self.llm.chat(
+				messages=[
+					{"role": "system", "content": "You assign missing propositions to existing educational concepts."},
+					{"role": "user", "content": prompt},
+				],
+				model=REATTACH_MODEL,
+				response_format={"type": "json_object"},
+			)
+			data = json.loads(raw)
+			assignments = data.get("assignments", []) if isinstance(data, dict) else []
+			if isinstance(data, dict) and isinstance(data.get("unassigned"), list):
+				unassigned = {int(x) for x in data.get("unassigned", []) if isinstance(x, int) or str(x).isdigit()}
+		except Exception as e:
+			self.log(f"   Guard: missing-proposition reattach failed: {e}")
+			assignments = []
+
+		for item in assignments:
+			if not isinstance(item, dict):
+				continue
+			try:
+				idx = int(item.get("index"))
+			except Exception:
+				continue
+			conceptId = str(item.get("conceptId", "")).strip()
+			if idx not in missing or conceptId not in self.concepts:
+				continue
+			if idx in self.concepts[conceptId].propositionIndices:
+				unassigned.discard(idx)
+				continue
+			self.concepts[conceptId].propositionIndices.append(idx)
+			unassigned.discard(idx)
+
+		# Deterministic fallback for any remaining indices.
+		for idx in list(unassigned):
+			bestId = self._bestConceptByTokenOverlap(idx)
+			if bestId is None:
+				bestId = self._bestConceptByThemeKeywords(idx)
+			if bestId:
+				self.concepts[bestId].propositionIndices.append(idx)
+				unassigned.discard(idx)
+
+		stillMissing = sorted(idx for idx in missing if idx in unassigned)
+		if stillMissing:
+			self.log(f"   Guard: could not reattach {len(stillMissing)} propositions; keeping recovery fallback.")
+		else:
+			self.log("   Guard: reattached all missing propositions to existing concepts.")
+		return stillMissing
+
+	def _bestConceptByTokenOverlap(self, propIndex: int, excludeConceptId: Optional[str] = None) -> Optional[str]:
+		if not (0 <= propIndex < len(self.allPropositions)):
+			return None
+		item = self.allPropositions[propIndex]
+		text = item["text"] if isinstance(item, dict) else str(item)
+		propTokens = set(self._normalizePropText(text).split())
+		if not propTokens:
+			return None
+
+		bestId = None
+		bestScore = 0.0
+		for conceptId, concept in self.concepts.items():
+			if excludeConceptId and conceptId == excludeConceptId:
+				continue
+			if len(concept.propositionIndices) >= MAX_PROPS_PER_CONCEPT:
+				continue
+			conceptTokens = set()
+			for t in concept.propositions[:10]:
+				conceptTokens.update(self._normalizePropText(t).split())
+			if not conceptTokens:
+				continue
+			score = len(propTokens & conceptTokens) / max(1, len(propTokens | conceptTokens))
+			if score > bestScore:
+				bestScore = score
+				bestId = conceptId
+		if bestScore < 0.08:
+			return None
+		return bestId
+
+	def _bestConceptByThemeKeywords(self, propIndex: int, excludeConceptId: Optional[str] = None) -> Optional[str]:
+		if not (0 <= propIndex < len(self.allPropositions)):
+			return None
+		item = self.allPropositions[propIndex]
+		text = item["text"] if isinstance(item, dict) else str(item)
+		textTokens = set(self._normalizePropText(text).split())
+		if not textTokens:
+			return None
+
+		themeScores = {
+			theme: len(textTokens & keywords)
+			for theme, keywords in THEME_KEYWORDS.items()
+		}
+		bestTheme = max(themeScores, key=themeScores.get)
+		if themeScores[bestTheme] == 0:
+			return None
+
+		bestId = None
+		bestScore = 0
+		keywords = THEME_KEYWORDS[bestTheme]
+		for conceptId, concept in self.concepts.items():
+			if excludeConceptId and conceptId == excludeConceptId:
+				continue
+			if len(concept.propositionIndices) >= MAX_PROPS_PER_CONCEPT:
+				continue
+			signature = self._normalizePropText(f"{concept.title} {concept.summary}")
+			sigTokens = set(signature.split())
+			score = len(sigTokens & keywords)
+			if score > bestScore:
+				bestScore = score
+				bestId = conceptId
+		if bestScore == 0:
+			return None
+		return bestId
+
+	def _reduceInterConceptOverlap(self, threshold: float):
+		if threshold <= 0:
+			return
+		ids = list(self.concepts.keys())
+		for i in range(len(ids)):
+			idA = ids[i]
+			if idA not in self.concepts:
+				continue
+			for j in range(i + 1, len(ids)):
+				idB = ids[j]
+				if idB not in self.concepts:
+					continue
+				aTexts = {self._normalizePropText(t) for t in self.concepts[idA].propositions}
+				bTexts = {self._normalizePropText(t) for t in self.concepts[idB].propositions}
+				aTexts.discard("")
+				bTexts.discard("")
+				a = set(self.concepts[idA].propositionIndices)
+				b = set(self.concepts[idB].propositionIndices)
+				if not a or not b:
+					continue
+				inter = aTexts & bTexts
+				if not inter:
+					continue
+				overlapRatio = len(inter) / min(len(aTexts), len(bTexts))
+				if overlapRatio <= threshold:
+					continue
+
+				keepId = idA
+				dropId = idB
+				if len(b) > len(a) or (len(b) == len(a) and idB < idA):
+					keepId = idB
+					dropId = idA
+				self.log(
+					f"   Guard: overlap {overlapRatio:.2f} between '{idA}' and '{idB}', "
+					f"keeping shared propositions in '{keepId}'."
+				)
+				filtered = []
+				for idx in self.concepts[dropId].propositionIndices:
+					if 0 <= idx < len(self.allPropositions):
+						item = self.allPropositions[idx]
+						text = item["text"] if isinstance(item, dict) else str(item)
+						if self._normalizePropText(text) in inter:
+							continue
+					filtered.append(idx)
+				self.concepts[dropId].propositionIndices = sorted(set(filtered))
+
+		self._refreshConceptTextsFromIndices()
+
+	def _dropEmptyConcepts(self):
+		emptyIds = [cid for cid, c in self.concepts.items() if not c.propositionIndices]
+		for cid in emptyIds:
+			del self.concepts[cid]
+		if emptyIds:
+			self.log(f"   Guard: dropped {len(emptyIds)} empty concepts.")
+
+	def _validateAssignments(self):
+		total = len(self.allPropositions)
+		owners = {}
+		for cid, concept in self.concepts.items():
+			for idx in concept.propositionIndices:
+				owners.setdefault(idx, []).append(cid)
+
+		missing = [idx for idx in range(total) if idx not in owners]
+		duplicates = [idx for idx, cids in owners.items() if len(cids) > 1]
+		if missing or duplicates:
+			raise ValueError(
+				f"Assignment validation failed: missing={len(missing)}, duplicate_owners={len(duplicates)}"
+			)

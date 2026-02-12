@@ -1,0 +1,293 @@
+{
+  "summary": {
+    "totalPropositions": 267,
+    "deterministicIssueCounts": {
+      "exact_duplicates": 17,
+      "near_duplicates": 20,
+      "unresolved_pronoun_starts": 0,
+      "relative_references": 0,
+      "too_short": 0,
+      "too_long": 0,
+      "unknown_figure_refs": 0
+    }
+  },
+  "deterministic": {
+    "issueCounts": {
+      "exact_duplicates": 17,
+      "near_duplicates": 20,
+      "unresolved_pronoun_starts": 0,
+      "relative_references": 0,
+      "too_short": 0,
+      "too_long": 0,
+      "unknown_figure_refs": 0
+    },
+    "exactDuplicates": [
+      {
+        "indices": [
+          137,
+          149
+        ],
+        "text": "Refundable deposits increase the supply of recycled glass from Sr to S’r."
+      },
+      {
+        "indices": [
+          138,
+          150
+        ],
+        "text": "Refundable deposits increase the aggregate supply of glass from S to S’."
+      },
+      {
+        "indices": [
+          139,
+          151
+        ],
+        "text": "The supply of virgin glass containers is given by Sv."
+      },
+      {
+        "indices": [
+          140,
+          152
+        ],
+        "text": "The supply of recycled glass is given by Sr."
+      },
+      {
+        "indices": [
+          141,
+          153
+        ],
+        "text": "Initially, equilibrium in the market for glass containers involved the price P."
+      },
+      {
+        "indices": [
+          142,
+          154
+        ],
+        "text": "Initially, the equilibrium involved a supply of recycled glass M1."
+      },
+      {
+        "indices": [
+          143,
+          155
+        ],
+        "text": "The market supply S is the horizontal sum of the virgin and recycled glass supply curves."
+      },
+      {
+        "indices": [
+          144,
+          156
+        ],
+        "text": "The price of glass falls to P’."
+      },
+      {
+        "indices": [
+          145,
+          157
+        ],
+        "text": "The quantity of recycled glass increases to M*."
+      },
+      {
+        "indices": [
+          146,
+          158
+        ],
+        "text": "The amount of disposed glass decreases."
+      },
+      {
+        "indices": [
+          147,
+          159
+        ],
+        "text": "A refundable deposits system has led to 78.9 percent of consumers purchasing recyclable glass containers."
+      },
+      {
+        "indices": [
+          148,
+          160
+        ],
+        "text": "Recycling efforts have expanded in the past decade."
+      },
+      {
+        "indices": [
+          230,
+          260
+        ],
+        "text": "The mosquito abatement program is worth more to the community than its $50,000 cost."
+      },
+      {
+        "indices": [
+          231,
+          264
+        ],
+        "text": "Free riders make it difficult or impossible for markets to provide public goods efficiently."
+      },
+      {
+        "indices": [
+          232,
+          265
+        ],
+        "text": "Public goods must be subsidized or provided by governments to achieve efficient production."
+      },
+      {
+        "indices": [
+          233,
+          266
+        ],
+        "text": "Households have no incentive to pay the full value of mosquito abatement."
+      },
+      {
+        "indices": [
+          234,
+          249
+        ],
+        "text": "The fishermen would not pay for the cost of the filter."
+      }
+    ],
+    "nearDuplicatePairs": [
+      {
+        "i": 77,
+        "j": 102,
+        "jaccard": 1.0,
+        "text_i": "In the early 1990s, economists expected these permits to trade for around $300.",
+        "text_j": "In the early 1990s economists expected these permits to trade for around $300."
+      },
+      {
+        "i": 137,
+        "j": 149,
+        "jaccard": 1.0,
+        "text_i": "Refundable deposits increase the supply of recycled glass from Sr to S’r.",
+        "text_j": "Refundable deposits increase the supply of recycled glass from Sr to S’r."
+      },
+      {
+        "i": 138,
+        "j": 150,
+        "jaccard": 1.0,
+        "text_i": "Refundable deposits increase the aggregate supply of glass from S to S’.",
+        "text_j": "Refundable deposits increase the aggregate supply of glass from S to S’."
+      },
+      {
+        "i": 139,
+        "j": 151,
+        "jaccard": 1.0,
+        "text_i": "The supply of virgin glass containers is given by Sv.",
+        "text_j": "The supply of virgin glass containers is given by Sv."
+      },
+      {
+        "i": 140,
+        "j": 152,
+        "jaccard": 1.0,
+        "text_i": "The supply of recycled glass is given by Sr.",
+        "text_j": "The supply of recycled glass is given by Sr."
+      },
+      {
+        "i": 141,
+        "j": 153,
+        "jaccard": 1.0,
+        "text_i": "Initially, equilibrium in the market for glass containers involved the price P.",
+        "text_j": "Initially, equilibrium in the market for glass containers involved the price P."
+      },
+      {
+        "i": 142,
+        "j": 154,
+        "jaccard": 1.0,
+        "text_i": "Initially, the equilibrium involved a supply of recycled glass M1.",
+        "text_j": "Initially, the equilibrium involved a supply of recycled glass M1."
+      },
+      {
+        "i": 143,
+        "j": 155,
+        "jaccard": 1.0,
+        "text_i": "The market supply S is the horizontal sum of the virgin and recycled glass supply curves.",
+        "text_j": "The market supply S is the horizontal sum of the virgin and recycled glass supply curves."
+      },
+      {
+        "i": 144,
+        "j": 156,
+        "jaccard": 1.0,
+        "text_i": "The price of glass falls to P’.",
+        "text_j": "The price of glass falls to P’."
+      },
+      {
+        "i": 145,
+        "j": 157,
+        "jaccard": 1.0,
+        "text_i": "The quantity of recycled glass increases to M*.",
+        "text_j": "The quantity of recycled glass increases to M*."
+      },
+      {
+        "i": 146,
+        "j": 158,
+        "jaccard": 1.0,
+        "text_i": "The amount of disposed glass decreases.",
+        "text_j": "The amount of disposed glass decreases."
+      },
+      {
+        "i": 147,
+        "j": 159,
+        "jaccard": 1.0,
+        "text_i": "A refundable deposits system has led to 78.9 percent of consumers purchasing recyclable glass containers.",
+        "text_j": "A refundable deposits system has led to 78.9 percent of consumers purchasing recyclable glass containers."
+      },
+      {
+        "i": 148,
+        "j": 160,
+        "jaccard": 1.0,
+        "text_i": "Recycling efforts have expanded in the past decade.",
+        "text_j": "Recycling efforts have expanded in the past decade."
+      },
+      {
+        "i": 174,
+        "j": 192,
+        "jaccard": 1.0,
+        "text_i": "World real GDP is projected to grow at 2.5% in real terms from a level of $65 trillion in 2016.",
+        "text_j": "World GDP is projected to grow at 2.5% in real terms from a level of $65 trillion in 2016."
+      },
+      {
+        "i": 178,
+        "j": 195,
+        "jaccard": 0.9091,
+        "text_i": "St is measured in parts per million (ppm) of atmospheric CO2e.",
+        "text_j": "St is measured in parts per million of atmospheric CO2e."
+      },
+      {
+        "i": 230,
+        "j": 260,
+        "jaccard": 1.0,
+        "text_i": "The mosquito abatement program is worth more to the community than its $50,000 cost.",
+        "text_j": "The mosquito abatement program is worth more to the community than its $50,000 cost."
+      },
+      {
+        "i": 231,
+        "j": 264,
+        "jaccard": 1.0,
+        "text_i": "Free riders make it difficult or impossible for markets to provide public goods efficiently.",
+        "text_j": "Free riders make it difficult or impossible for markets to provide public goods efficiently."
+      },
+      {
+        "i": 232,
+        "j": 265,
+        "jaccard": 1.0,
+        "text_i": "Public goods must be subsidized or provided by governments to achieve efficient production.",
+        "text_j": "Public goods must be subsidized or provided by governments to achieve efficient production."
+      },
+      {
+        "i": 233,
+        "j": 266,
+        "jaccard": 1.0,
+        "text_i": "Households have no incentive to pay the full value of mosquito abatement.",
+        "text_j": "Households have no incentive to pay the full value of mosquito abatement."
+      },
+      {
+        "i": 234,
+        "j": 249,
+        "jaccard": 1.0,
+        "text_i": "The fishermen would not pay for the cost of the filter.",
+        "text_j": "The fishermen would not pay for the cost of the filter."
+      }
+    ],
+    "unresolvedPronounStarts": [],
+    "relativeReferences": [],
+    "tooShort": [],
+    "tooLong": [],
+    "unknownFigureReferences": []
+  }
+}
